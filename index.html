@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>えほんきろく</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBYwqx1EWud8gO_d2Nc3ZYLYCz8qhXKfq8",
+    authDomain: "ehon-kiroku.firebaseapp.com",
+    projectId: "ehon-kiroku",
+    storageBucket: "ehon-kiroku.firebasestorage.app",
+    messagingSenderId: "518204367200",
+    appId: "1:518204367200:web:1c06e02d2956c4ea5d7e05"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db  = getFirestore(app);
+
+  // Firestore書き込み関数をグローバルに公開
+  window._fsAddShelf = async (book) => {
+    await setDoc(doc(db, 'shelf', book.isbn), book);
+  };
+  window._fsDeleteShelf = async (isbn) => {
+    await deleteDoc(doc(db, 'shelf', isbn));
+  };
+  window._fsAddRecord = async (rec) => {
+    await setDoc(doc(db, 'records', String(rec.id)), rec);
+  };
+  window._fsDeleteRecord = async (id) => {
+    await deleteDoc(doc(db, 'records', String(id)));
+  };
+
+  // リアルタイム同期：shelf
+  onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
+    window.shelf = snap.docs.map(d => d.data());
+    localStorage.setItem('ehon_shelf', JSON.stringify(window.shelf));
+    if (typeof renderAll === 'function') renderAll();
+  });
+
+  // リアルタイム同期：records
+  onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
+    window.records = snap.docs.map(d => d.data());
+    localStorage.setItem('ehon_records', JSON.stringify(window.records));
+    if (typeof renderAll === 'function') renderAll();
+    if (typeof renderRecordList === 'function') renderRecordList();
+  });
+
+  window._firebaseReady = true;
+  const el = document.getElementById('syncStatus');
+  if (el) el.textContent = '☁️ 同期中';
+  console.log('[えほんきろく] Firebase接続完了');
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Kosugi+Maru&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --cream: #FFF8EE;
+  --warm: #FFE4C4;
+  --coral: #FF7A5A;
+  --teal: #4ECDC4;
+  --teal-dark: #2BA89F;
+  --navy: #2C3E6B;
+  --navy-light: #3D5A8A;
+  --yellow: #FFD93D;
+  --shadow: 0 4px 20px rgba(44,62,107,0.12);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Kosugi Maru', sans-serif;
+  background: var(--cream);
+  min-height: 100vh;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+/* HEADER */
+.app-header {
+  background: linear-gradient(135deg, var(--navy), var(--navy-light));
+  padding: 20px 20px 56px;
+  position: relative;
+  overflow: hidden;
+}
+.app-header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; left: 0; right: 0;
+  height: 44px;
+  background: var(--cream);
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+}
+.app-title {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 1.55rem;
+  color: white;
+}
+.app-title em { color: var(--yellow); font-style: normal; }
+
+/* STATS */
+.stats-bar {
+  display: flex;
+  gap: 10px;
+  padding: 0 16px;
+  margin-top: -22px;
+  position: relative;
+  z-index: 10;
+}
+.stat-card {
+  flex: 1;
+  background: white;
+  border-radius: 14px;
+  padding: 12px 8px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.stat-num {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 1.7rem;
+  color: var(--navy);
+  line-height: 1;
+}
+.stat-label { font-size: 0.65rem; color: #999; margin-top: 3px; }
+.stat-card.teal .stat-num  { color: var(--teal-dark); }
+.stat-card.coral .stat-num { color: var(--coral); }
+
+/* BOTTOM NAV */
+.bottom-nav {
+  position: fixed;
+  bottom: 0; left: 50%;
+  transform: translateX(-50%);
+  width: 100%; max-width: 480px;
+  background: white;
+  border-top: 1px solid #f0e8dc;
+  display: flex;
+  z-index: 50;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.07);
+}
+.nav-btn {
+  flex: 1;
+  padding: 12px 4px 16px;
+  border: none; background: transparent; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif;
+  font-size: 0.72rem; color: #ccc;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  transition: color 0.2s;
+}
+.nav-btn .nav-icon { font-size: 1.5rem; }
+.nav-btn.active { color: var(--navy); }
+
+/* PAGES */
+.page { display: none; padding: 16px 16px 90px; }
+.page.active { display: block; }
+
+.section-title {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 1.05rem;
+  color: var(--navy);
+  margin-bottom: 14px;
+}
+
+/* ACTION CARDS */
+.action-row { display: flex; gap: 12px; margin-bottom: 20px; }
+.action-card {
+  flex: 1; border-radius: 18px; padding: 20px 12px;
+  text-align: center; border: none; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif;
+  transition: transform 0.15s;
+}
+.action-card:active { transform: scale(0.97); }
+.action-card.scan { background: linear-gradient(135deg, var(--teal), var(--teal-dark)); box-shadow: 0 6px 20px rgba(78,205,196,0.4); }
+.action-card.isbn { background: linear-gradient(135deg, #6C63FF, #4B44CC); box-shadow: 0 6px 20px rgba(108,99,255,0.35); }
+.action-icon { font-size: 2.2rem; display: block; margin-bottom: 6px; }
+.action-text { color: white; font-size: 0.9rem; font-weight: bold; }
+.action-sub  { color: rgba(255,255,255,0.8); font-size: 0.72rem; margin-top: 2px; }
+
+/* SEARCH */
+.search-wrap { position: relative; margin-bottom: 14px; }
+.search-input {
+  width: 100%;
+  padding: 13px 16px 13px 44px;
+  border: 2px solid var(--warm); border-radius: 14px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.93rem;
+  background: white; outline: none; transition: border-color 0.2s;
+}
+.search-input:focus { border-color: var(--teal); }
+.search-icon {
+  position: absolute; left: 14px; top: 50%;
+  transform: translateY(-50%); font-size: 1.1rem; pointer-events: none;
+}
+
+/* BOOK GRID */
+.book-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.book-thumb {
+  background: white; border-radius: 14px; overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07); cursor: pointer;
+  transition: transform 0.15s; animation: fadeIn 0.35s ease;
+}
+.book-thumb:active { transform: scale(0.96); }
+.book-thumb-cover {
+  width: 100%; aspect-ratio: 3/4;
+  background: var(--warm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2.4rem; overflow: hidden;
+}
+.book-thumb-cover img { width: 100%; height: 100%; object-fit: cover; }
+.book-thumb-info { padding: 8px 8px 10px; }
+.book-thumb-title {
+  font-size: 0.72rem; color: var(--navy); line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.book-thumb-count { margin-top: 4px; font-size: 0.65rem; color: #bbb; }
+
+/* RECORD CARDS */
+.record-card {
+  background: white; border-radius: 16px; padding: 14px;
+  margin-bottom: 12px; display: flex; gap: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06); animation: fadeIn 0.35s ease;
+}
+.record-cover {
+  width: 52px; height: 68px; border-radius: 8px;
+  background: var(--warm); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.6rem; overflow: hidden;
+}
+.record-cover img { width: 100%; height: 100%; object-fit: cover; }
+.record-body { flex: 1; min-width: 0; }
+.record-title { font-size: 0.9rem; font-weight: bold; color: var(--navy); line-height: 1.3; }
+.record-meta { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.reader-tag { padding: 2px 9px; border-radius: 50px; font-size: 0.7rem; font-weight: bold; }
+.tag-son      { background: #E8FAFB; color: var(--teal-dark); }
+.tag-daughter { background: #FFF0EC; color: var(--coral); }
+.tag-both     { background: #FFFBEA; color: #B8860B; }
+.record-date    { font-size: 0.72rem; color: #ccc; }
+.record-comment { font-size: 0.8rem; color: #888; margin-top: 5px; font-style: italic; line-height: 1.4; }
+.record-delete {
+  background: none; border: none; color: #ddd;
+  font-size: 1rem; cursor: pointer; flex-shrink: 0; align-self: flex-start; padding: 2px;
+}
+
+/* FILTER */
+.filter-row {
+  display: flex; gap: 7px;
+  margin-bottom: 14px; overflow-x: auto; padding-bottom: 2px;
+}
+.filter-btn {
+  padding: 7px 14px; border-radius: 50px;
+  border: 2px solid var(--warm); background: white; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.77rem;
+  white-space: nowrap; color: #999; transition: all 0.2s;
+}
+.filter-btn.active { border-color: var(--navy); background: var(--navy); color: white; }
+
+/* EMPTY */
+.empty-state { text-align: center; padding: 50px 20px; }
+.empty-icon  { font-size: 3.5rem; margin-bottom: 12px; }
+.empty-text  { font-size: 0.9rem; color: #bbb; line-height: 1.7; }
+
+/* MODAL */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5); z-index: 100;
+  align-items: flex-end; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--cream); border-radius: 28px 28px 0 0;
+  padding: 24px 20px 44px; width: 100%; max-width: 480px;
+  animation: slideUp 0.28s ease; max-height: 92vh; overflow-y: auto;
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes fadeIn  { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+.modal-handle { width: 36px; height: 4px; background: #ddd; border-radius: 2px; margin: 0 auto 18px; }
+.modal-heading {
+  font-family: 'Nunito', sans-serif; font-weight: 900;
+  font-size: 1.15rem; color: var(--navy); margin-bottom: 16px;
+}
+
+/* BOOK INFO BLOCK */
+.book-info-block {
+  display: flex; gap: 14px; padding: 14px;
+  background: white; border-radius: 16px; margin-bottom: 18px;
+}
+.b-cover {
+  width: 64px; height: 84px; border-radius: 8px;
+  background: var(--warm); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2rem; overflow: hidden;
+}
+.b-cover img { width: 100%; height: 100%; object-fit: cover; }
+.b-info { flex: 1; }
+.b-title  { font-size: 0.95rem; font-weight: bold; color: var(--navy); line-height: 1.35; }
+.b-author { font-size: 0.78rem; color: #999; margin-top: 4px; }
+.b-isbn   { font-size: 0.7rem; color: #ccc; margin-top: 3px; }
+.b-loading { color: #bbb; }
+
+/* FORM */
+.field-label   { font-size: 0.8rem; color: #999; margin-bottom: 8px; margin-top: 16px; }
+.field-input {
+  width: 100%; padding: 13px 15px;
+  border: 2px solid var(--warm); border-radius: 13px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.93rem;
+  background: white; outline: none; transition: border-color 0.2s;
+}
+.field-input:focus { border-color: var(--teal); }
+.field-textarea {
+  width: 100%; padding: 13px 15px;
+  border: 2px solid var(--warm); border-radius: 13px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.93rem;
+  background: white; outline: none; resize: none; height: 85px;
+}
+.field-textarea:focus { border-color: var(--teal); }
+
+/* READER BTNS */
+.reader-row { display: flex; gap: 9px; }
+.reader-btn {
+  flex: 1; padding: 13px 6px;
+  border: 2.5px solid var(--warm); border-radius: 13px;
+  background: white; cursor: pointer; text-align: center;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.85rem;
+  transition: all 0.18s;
+}
+.reader-btn .re { font-size: 1.5rem; display: block; margin-bottom: 3px; }
+.sel-son      { border-color: var(--teal);   background: #E8FAFB; color: var(--teal-dark); }
+.sel-daughter { border-color: var(--coral);  background: #FFF0EC; color: var(--coral); }
+.sel-both     { border-color: var(--yellow); background: #FFFBEA; color: #B8860B; }
+
+/* BUTTONS */
+.btn-primary {
+  width: 100%; padding: 17px;
+  background: linear-gradient(135deg, var(--navy), var(--navy-light));
+  color: white; border: none; border-radius: 15px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 1rem; cursor: pointer;
+  margin-top: 20px; box-shadow: 0 4px 16px rgba(44,62,107,0.3);
+  transition: transform 0.15s;
+}
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.5; }
+.btn-cancel {
+  width: 100%; padding: 13px; background: transparent; color: #bbb; border: none;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.88rem; cursor: pointer; margin-top: 8px;
+}
+.btn-danger {
+  width: 100%; padding: 14px; background: transparent; color: #ff6b6b;
+  border: 2px solid #ffcdd2; border-radius: 13px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.9rem; cursor: pointer; margin-top: 12px;
+}
+
+/* ISBN MODAL */
+.isbn-row { display: flex; gap: 8px; }
+.isbn-input {
+  flex: 1; padding: 13px 14px;
+  border: 2px solid var(--warm); border-radius: 13px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.9rem;
+  background: white; outline: none;
+}
+.isbn-input:focus { border-color: var(--teal); }
+.isbn-btn {
+  padding: 13px 16px; background: var(--navy); color: white;
+  border: none; border-radius: 13px; cursor: pointer; font-size: 1.1rem;
+}
+
+/* BOOK SEARCH RESULTS */
+.book-search-result {
+  display: flex; gap: 12px; align-items: center;
+  padding: 12px 14px; background: white; border-radius: 14px;
+  margin-bottom: 10px; cursor: pointer;
+  border: 2px solid transparent; transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.book-search-result.selected,
+.book-search-result:hover { border-color: var(--teal); background: #F0FAFA; }
+.bsr-cover {
+  width: 42px; height: 54px; border-radius: 6px; background: var(--warm);
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 1.4rem; overflow: hidden;
+}
+.bsr-cover img { width: 100%; height: 100%; object-fit: cover; }
+.bsr-title  { font-size: 0.88rem; font-weight: bold; color: var(--navy); line-height: 1.3; }
+.bsr-author { font-size: 0.74rem; color: #aaa; margin-top: 2px; }
+
+/* CAMERA */
+.camera-modal { display: none; position: fixed; inset: 0; background: black; z-index: 200; flex-direction: column; }
+.camera-modal.open { display: flex; }
+#scanner-container { flex: 1; position: relative; overflow: hidden; }
+#scanner-container video { width: 100%; height: 100%; object-fit: cover; }
+.scan-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; pointer-events: none;
+}
+.scan-frame {
+  width: 240px; height: 120px; border: 3px solid var(--teal); border-radius: 12px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.55); position: relative; overflow: hidden;
+}
+.scan-line {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 2px; background: var(--teal);
+  animation: scanMove 1.5s ease-in-out infinite; box-shadow: 0 0 10px var(--teal);
+}
+@keyframes scanMove { 0% { top:0; } 100% { top:100%; } }
+.scan-hint { color: white; margin-top: 18px; font-size: 0.88rem; }
+.camera-close {
+  padding: 18px; background: transparent; border: none;
+  color: white; font-size: 1rem; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif; text-align: center;
+}
+
+/* DETAIL READ LIST */
+.detail-read-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid #f5ebe0;
+  font-size: 0.85rem; color: #555;
+}
+.detail-read-item:last-child { border-bottom: none; }
+
+/* EXPORT PAGE */
+.export-card {
+  background: white; border-radius: 16px; padding: 18px 16px;
+  margin-bottom: 14px; display: flex; align-items: center; gap: 14px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.export-icon { font-size: 2.2rem; flex-shrink: 0; }
+.export-info { flex: 1; }
+.export-title { font-size: 0.95rem; font-weight: bold; color: var(--navy); }
+.export-desc  { font-size: 0.75rem; color: #aaa; margin-top: 3px; line-height: 1.4; }
+.export-btn {
+  padding: 10px 16px; background: var(--navy); color: white;
+  border: none; border-radius: 12px; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.8rem;
+  flex-shrink: 0; transition: transform 0.15s;
+  box-shadow: 0 2px 8px rgba(44,62,107,0.25);
+}
+.export-btn:active { transform: scale(0.96); }
+
+/* TOAST */
+.toast {
+  position: fixed; bottom: 90px; left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--navy); color: white;
+  padding: 11px 22px; border-radius: 50px;
+  font-size: 0.88rem; opacity: 0;
+  transition: all 0.28s; z-index: 999;
+  pointer-events: none; white-space: nowrap;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="app-header">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+  <div class="app-title">📚 えほん<em>きろく</em></div>
+  <div id="syncStatus" style="font-size:0.7rem;color:rgba(255,255,255,0.6)">接続中...</div>
+</div>
+</div>
+
+<!-- STATS -->
+<div class="stats-bar">
+  <div class="stat-card">
+    <div class="stat-num" id="statBooks">0</div>
+    <div class="stat-label">登録冊数</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-num" id="statRecords">0</div>
+    <div class="stat-label">読んだ回数</div>
+  </div>
+  <div class="stat-card teal">
+    <div class="stat-num" id="statSon">0</div>
+    <div class="stat-label">👦 越希</div>
+  </div>
+  <div class="stat-card coral">
+    <div class="stat-num" id="statDaughter">0</div>
+    <div class="stat-label">👧 風美歩</div>
+  </div>
+</div>
+
+<!-- PAGE: 本棚 -->
+<div class="page active" id="page-shelf">
+  <br>
+  <div class="section-title">📦 本棚に登録する</div>
+  <div class="action-row">
+    <button class="action-card scan" onclick="openScanModal()">
+      <span class="action-icon">📷</span>
+      <div class="action-text">バーコードスキャン</div>
+      <div class="action-sub">カメラで読み取る</div>
+    </button>
+    <button class="action-card isbn" onclick="openIsbnModal()">
+      <span class="action-icon">🔢</span>
+      <div class="action-text">ISBN手入力</div>
+      <div class="action-sub">番号を直接入力</div>
+    </button>
+  </div>
+
+  <div class="section-title">🗄 登録済みの絵本（<span id="shelfCount">0</span>冊）</div>
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input class="search-input" id="shelfSearch" placeholder="タイトルで絞り込む..." oninput="renderShelf()">
+  </div>
+  <div class="book-grid" id="shelfGrid"></div>
+</div>
+
+<!-- PAGE: 読書記録 -->
+<div class="page" id="page-record">
+  <br>
+  <div class="section-title">📖 読んだ本を記録する</div>
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input class="search-input" id="recordBookSearch"
+      placeholder="本のタイトルで検索して選ぶ..."
+      oninput="renderRecordBookSearch()">
+  </div>
+  <div id="recordBookResults"></div>
+
+  <hr style="border:none;border-top:1px solid #f0e8dc;margin:18px 0 14px">
+  <div class="section-title" style="font-size:0.95rem">📋 読書きろく一覧</div>
+  <div class="filter-row">
+    <button class="filter-btn active" onclick="setRecordFilter('all',this)">すべて</button>
+    <button class="filter-btn" onclick="setRecordFilter('son',this)">👦 越希</button>
+    <button class="filter-btn" onclick="setRecordFilter('daughter',this)">👧 風美歩</button>
+    <button class="filter-btn" onclick="setRecordFilter('both',this)">👨‍👧‍👦 ふたり</button>
+  </div>
+  <div id="recordList"></div>
+</div>
+
+<!-- PAGE: CSV出力 -->
+<div class="page" id="page-export">
+  <br>
+  <div class="section-title">📊 データを出力する</div>
+
+  <div class="export-card">
+    <div class="export-icon">📦</div>
+    <div class="export-info">
+      <div class="export-title">本棚データ（登録済み絵本）</div>
+      <div class="export-desc">タイトル・著者・ISBN・登録日を出力します</div>
+    </div>
+    <button class="export-btn" onclick="exportShelfCSV()">CSV出力</button>
+  </div>
+
+  <div class="export-card">
+    <div class="export-icon">📖</div>
+    <div class="export-info">
+      <div class="export-title">読書きろくデータ</div>
+      <div class="export-desc">タイトル・読んだ日・読んだ人・コメントを出力します</div>
+    </div>
+    <button class="export-btn" onclick="exportRecordsCSV()">CSV出力</button>
+  </div>
+
+  <div class="export-card">
+    <div class="export-icon">📋</div>
+    <div class="export-info">
+      <div class="export-title">全データまとめて出力</div>
+      <div class="export-desc">本棚＋読書きろくを1ファイルにまとめます</div>
+    </div>
+    <button class="export-btn" onclick="exportAllCSV()">CSV出力</button>
+  </div>
+
+  <div style="margin-top:24px;padding:16px;background:white;border-radius:16px;font-size:0.8rem;color:#aaa;line-height:1.7">
+    💡 出力したCSVはExcelやGoogleスプレッドシートで開けます。<br>
+    文字化けする場合はUTF-8（BOM付き）で開いてください。
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<nav class="bottom-nav">
+  <button class="nav-btn active" id="nav-shelf" onclick="switchPage('shelf')">
+    <span class="nav-icon">🗄</span>本棚
+  </button>
+  <button class="nav-btn" id="nav-record" onclick="switchPage('record')">
+    <span class="nav-icon">📖</span>読書きろく
+  </button>
+  <button class="nav-btn" id="nav-export" onclick="switchPage('export')">
+    <span class="nav-icon">📊</span>CSV出力
+  </button>
+</nav>
+
+<!-- CAMERA MODAL -->
+<div class="camera-modal" id="cameraModal">
+  <div id="scanner-container">
+    <div class="scan-overlay">
+      <div class="scan-frame"><div class="scan-line"></div></div>
+      <div class="scan-hint">バーコードを枠に合わせてください</div>
+    </div>
+  </div>
+  <button class="camera-close" onclick="closeCamera()">✕ キャンセル</button>
+</div>
+
+<!-- ISBN入力モーダル -->
+<div class="modal-overlay" id="isbnModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">ISBNを入力</div>
+    <div class="isbn-row">
+      <input class="isbn-input" id="isbnInputField" type="number"
+        placeholder="例: 9784834000825"
+        onkeydown="if(event.key==='Enter')lookupFromIsbnModal()">
+      <button class="isbn-btn" onclick="lookupFromIsbnModal()">🔍</button>
+    </div>
+    <button class="btn-cancel" onclick="closeIsbnModal()">キャンセル</button>
+  </div>
+</div>
+
+<!-- 本棚登録確認モーダル -->
+<div class="modal-overlay" id="addShelfModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">本棚に追加する</div>
+    <div class="book-info-block">
+      <div class="b-cover" id="as-cover">📚</div>
+      <div class="b-info">
+        <div class="b-title b-loading" id="as-title">情報を取得中...</div>
+        <div class="b-author" id="as-author"></div>
+        <div class="b-isbn"   id="as-isbn"></div>
+      </div>
+    </div>
+    <button class="btn-primary" id="as-saveBtn" onclick="saveToShelf()" disabled>📦 本棚に登録する</button>
+    <button class="btn-cancel" onclick="closeAddShelfModal()">キャンセル</button>
+  </div>
+</div>
+
+<!-- 読書記録モーダル -->
+<div class="modal-overlay" id="addRecordModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">読書を記録する</div>
+    <div class="book-info-block">
+      <div class="b-cover" id="ar-cover">📚</div>
+      <div class="b-info">
+        <div class="b-title"  id="ar-title">—</div>
+        <div class="b-author" id="ar-author"></div>
+      </div>
+    </div>
+
+    <div class="field-label">だれと読んだ？</div>
+    <div class="reader-row">
+      <button class="reader-btn" id="rb-son"      onclick="selectReader('son')"><span class="re">👦</span>越希</button>
+      <button class="reader-btn" id="rb-daughter" onclick="selectReader('daughter')"><span class="re">👧</span>風美歩</button>
+      <button class="reader-btn" id="rb-both"     onclick="selectReader('both')"><span class="re">👨‍👧‍👦</span>ふたり</button>
+    </div>
+
+    <div class="field-label">読んだ日</div>
+    <input class="field-input" type="date" id="ar-date">
+
+    <div class="field-label">ひとこと（任意）</div>
+    <textarea class="field-textarea" id="ar-comment" placeholder="感想やメモ... 🌟"></textarea>
+
+    <button class="btn-primary" onclick="saveRecord()">💾 記録する</button>
+    <button class="btn-cancel"  onclick="closeAddRecordModal()">キャンセル</button>
+  </div>
+</div>
+
+<!-- 本の詳細モーダル -->
+<div class="modal-overlay" id="bookDetailModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">本の詳細</div>
+    <div class="book-info-block">
+      <div class="b-cover" id="bd-cover">📚</div>
+      <div class="b-info">
+        <div class="b-title"  id="bd-title">—</div>
+        <div class="b-author" id="bd-author"></div>
+        <div class="b-isbn"   id="bd-isbn"></div>
+      </div>
+    </div>
+    <button class="btn-primary" onclick="openRecordFromDetail()">📖 この本の読書を記録する</button>
+    <div style="margin-top:18px;font-size:0.82rem;color:#aaa;margin-bottom:6px">読書きろく</div>
+    <div id="bd-readList"></div>
+    <button class="btn-danger" onclick="deleteFromShelf()">🗑 本棚から削除する</button>
+    <button class="btn-cancel" onclick="closeBookDetail()">閉じる</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== DATA =====
+let shelf   = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
+let records = JSON.parse(localStorage.getItem('ehon_records') || '[]');
+
+let currentBookData   = null;
+let currentReader     = '';
+let selectedShelfBook = null;
+let detailBook        = null;
+let recordFilter      = 'all';
+let scannerRunning    = false;
+
+// ===== INIT =====
+document.getElementById('ar-date').valueAsDate = new Date();
+renderAll();
+
+// ===== NAV =====
+function switchPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('nav-' + page).classList.add('active');
+  if (page === 'record') { renderRecordBookSearch(); renderRecordList(); }
+  if (page === 'export') { /* static page */ }
+}
+
+// ===== RENDER =====
+function renderAll() { renderStats(); renderShelf(); }
+
+function renderStats() {
+  document.getElementById('statBooks').textContent    = shelf.length;
+  document.getElementById('statRecords').textContent  = records.length;
+  document.getElementById('statSon').textContent      = records.filter(r => r.reader === 'son'      || r.reader === 'both').length;
+  document.getElementById('statDaughter').textContent = records.filter(r => r.reader === 'daughter' || r.reader === 'both').length;
+}
+
+function renderShelf() {
+  const q = document.getElementById('shelfSearch').value.trim().toLowerCase();
+  const list = q ? shelf.filter(b => b.title.toLowerCase().includes(q)) : shelf;
+  document.getElementById('shelfCount').textContent = shelf.length;
+  const grid = document.getElementById('shelfGrid');
+  if (list.length === 0) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="empty-icon">📦</div>
+      <div class="empty-text">${shelf.length === 0
+        ? 'まだ本が登録されていません<br>バーコードをスキャンして<br>本棚に追加しましょう！'
+        : '見つかりませんでした'}</div></div>`;
+    return;
+  }
+  grid.innerHTML = list.map(b => {
+    const cnt = records.filter(r => r.isbn === b.isbn).length;
+    const cv  = b.cover ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
+      <div class="book-thumb-cover">${cv}</div>
+      <div class="book-thumb-info">
+        <div class="book-thumb-title">${esc(b.title)}</div>
+        <div class="book-thumb-count">${cnt > 0 ? `📖 ${cnt}回` : '未読'}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ===== CAMERA =====
+function openScanModal() {
+  document.getElementById('cameraModal').classList.add('open');
+  Quagga.init({
+    inputStream: { name:'Live', type:'LiveStream',
+      target: document.getElementById('scanner-container'),
+      constraints: { facingMode: 'environment' }
+    },
+    decoder: { readers: ['ean_reader','ean_8_reader'] }
+  }, err => {
+    if (err) { closeCamera(); showToast('カメラを開けませんでした'); return; }
+    Quagga.start(); scannerRunning = true;
+  });
+  Quagga.onDetected(r => {
+    const code = r.codeResult.code;
+    if (code && code.length >= 10) {
+      Quagga.stop(); scannerRunning = false;
+      closeCamera();
+      fetchAndOpenShelfModal(code);
+    }
+  });
+}
+function closeCamera() {
+  if (scannerRunning) { Quagga.stop(); scannerRunning = false; }
+  document.getElementById('cameraModal').classList.remove('open');
+}
+
+// ===== ISBN MODAL =====
+function openIsbnModal() {
+  document.getElementById('isbnInputField').value = '';
+  document.getElementById('isbnModal').classList.add('open');
+  setTimeout(() => document.getElementById('isbnInputField').focus(), 300);
+}
+function closeIsbnModal() { document.getElementById('isbnModal').classList.remove('open'); }
+function lookupFromIsbnModal() {
+  const v = document.getElementById('isbnInputField').value;
+  closeIsbnModal();
+  fetchAndOpenShelfModal(v);
+}
+
+// ===== FETCH BOOK =====
+async function fetchBook(isbn) {
+  isbn = String(isbn).replace(/[^0-9X]/g,'');
+  if (!isbn || isbn.length < 10) return null;
+  let title=null, author=null, cover=null;
+  const log=[];
+
+  // 1) Google Books
+  try {
+    const res  = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    const data = await res.json();
+    log.push(`[GB] items=${data.totalItems}`);
+    if (data.items?.length > 0) {
+      const info = data.items[0].volumeInfo;
+      title  = info.title || null;
+      author = (info.authors||[]).join(', ') || null;
+      const il = info.imageLinks||{};
+      const raw= il.medium||il.small||il.thumbnail||il.smallThumbnail||null;
+      if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','');
+    }
+  } catch(e) { log.push(`[GB] err`); }
+
+  // 2) NDL
+  if (!title) {
+    try {
+      const res  = await fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=3&mediatype=1`);
+      const text = await res.text();
+      const xml  = new DOMParser().parseFromString(text, 'application/xml');
+      const items= xml.querySelectorAll('item');
+      log.push(`[NDL] items=${items.length}`);
+      if (items.length > 0) {
+        const t = items[0].querySelector('title');
+        const c = items[0].getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','creator');
+        if (t?.textContent?.trim()) {
+          title  = t.textContent.trim();
+          author = author || c[0]?.textContent?.trim() || null;
+        }
+      }
+    } catch(e) { log.push(`[NDL] err`); }
+  }
+
+  // 3) Open Library 書誌
+  if (!title) {
+    try {
+      const res  = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
+      const data = await res.json();
+      const book = data[`ISBN:${isbn}`];
+      log.push(`[OL] found=${!!book}`);
+      if (book) {
+        title  = book.title || null;
+        author = author || (book.authors||[]).map(a=>a.name).join(', ') || null;
+        if (!cover && book.cover) cover = book.cover.medium||book.cover.small||null;
+      }
+    } catch(e) { log.push(`[OL] err`); }
+  }
+
+  // 4) Open Library カバー補完
+  if (!cover) {
+    const url = `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`;
+    const ok  = await imgExists(url);
+    log.push(`[OL cover] ${ok}`);
+    if (ok) cover = url;
+  }
+
+  console.log('[えほんきろく]', isbn, log.join(' | '), '→', title);
+  return title ? { isbn, title, author:author||'', cover:cover||null } : null;
+}
+
+function imgExists(url) {
+  return new Promise(r => {
+    const i = new Image();
+    i.onload  = () => r(i.naturalWidth > 1 && i.naturalHeight > 1);
+    i.onerror = () => r(false);
+    i.src = url;
+  });
+}
+
+// ===== SHELF MODAL FLOW =====
+async function fetchAndOpenShelfModal(isbn) {
+  isbn = String(isbn).replace(/[^0-9X]/g,'');
+  if (!isbn || isbn.length < 10) { showToast('ISBNを正しく入力してください'); return; }
+  const existingBook = shelf.find(b => b.isbn === isbn);
+  if (existingBook) {
+    openBookDetail(existingBook.isbn);
+    setTimeout(() => showToast('📚 この本はすでに本棚に登録されています'), 200);
+    return;
+  }
+
+  // モーダルを開いてローディング
+  document.getElementById('as-title').textContent = '情報を取得中...';
+  document.getElementById('as-title').className   = 'b-title b-loading';
+  document.getElementById('as-author').textContent= '';
+  document.getElementById('as-isbn').textContent  = 'ISBN: ' + isbn;
+  document.getElementById('as-cover').innerHTML   = '📚';
+  document.getElementById('as-saveBtn').disabled  = true;
+  document.getElementById('addShelfModal').classList.add('open');
+  currentBookData = null;
+
+  const book = await fetchBook(isbn);
+  if (book) {
+    currentBookData = book;
+    document.getElementById('as-title').textContent  = book.title;
+    document.getElementById('as-title').className    = 'b-title';
+    document.getElementById('as-author').textContent = book.author;
+    if (book.cover) document.getElementById('as-cover').innerHTML =
+      `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`;
+    document.getElementById('as-saveBtn').disabled = false;
+  } else {
+    document.getElementById('as-title').textContent = '書籍情報が見つかりませんでした';
+    showToast('⚠️ 情報を取得できませんでした（コンソール参照）');
+  }
+}
+function closeAddShelfModal() { document.getElementById('addShelfModal').classList.remove('open'); }
+function saveToShelf() {
+  if (!currentBookData) return;
+  currentBookData.addedAt = new Date().toISOString().slice(0,10);
+  if (window._firebaseReady && window._fsAddShelf) {
+    window._fsAddShelf(currentBookData)
+      .then(() => showToast('📦 本棚に登録しました！'))
+      .catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); });
+  } else {
+    // オフライン時はローカルに保存
+    shelf.unshift(currentBookData);
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+    showToast('📦 本棚に登録しました（オフライン）');
+    renderAll();
+  }
+  closeAddShelfModal();
+}
+
+// ===== BOOK DETAIL =====
+function openBookDetail(isbn) {
+  const book = shelf.find(b => b.isbn === isbn);
+  if (!book) return;
+  detailBook = book;
+  document.getElementById('bd-title').textContent  = book.title;
+  document.getElementById('bd-author').textContent = book.author;
+  document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '');
+  document.getElementById('bd-cover').innerHTML    = book.cover
+    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+
+  const bookRecs = records.filter(r => r.isbn === isbn);
+  const listEl   = document.getElementById('bd-readList');
+  if (bookRecs.length === 0) {
+    listEl.innerHTML = '<div style="color:#ccc;font-size:0.82rem;padding:8px 0">まだ記録がありません</div>';
+  } else {
+    listEl.innerHTML = bookRecs.map(r => {
+      const tag  = r.reader==='son' ? '👦 越希' : r.reader==='daughter' ? '👧 風美歩' : '👨‍👧‍👦 ふたり';
+      const date = r.date ? r.date.replace(/-/g,'/') : '';
+      return `<div class="detail-read-item">
+        <span>${tag}</span>
+        <span style="color:#ccc;font-size:0.78rem">${date}</span>
+        <span style="flex:1;color:#888;font-size:0.78rem">${r.comment ? '— '+esc(r.comment) : ''}</span>
+        <button onclick="deleteRecord(${r.id})" style="background:none;border:none;color:#ddd;cursor:pointer">🗑</button>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('bookDetailModal').classList.add('open');
+}
+function closeBookDetail() {
+  document.getElementById('bookDetailModal').classList.remove('open');
+  detailBook = null;
+}
+function openRecordFromDetail() {
+  const book = detailBook;
+  closeBookDetail();
+  if (book) openAddRecordModal(book);
+}
+function deleteFromShelf() {
+  if (!detailBook) return;
+  if (!confirm(`「${detailBook.title}」を本棚から削除しますか？\n（読書記録は残ります）`)) return;
+  const isbn = detailBook.isbn;
+  closeBookDetail();
+  if (window._firebaseReady && window._fsDeleteShelf) {
+    window._fsDeleteShelf(isbn)
+      .then(() => showToast('🗑 本棚から削除しました'))
+      .catch(e => { console.error(e); showToast('⚠️ 削除に失敗しました'); });
+  } else {
+    shelf = shelf.filter(b => b.isbn !== isbn);
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+    renderAll();
+    showToast('🗑 本棚から削除しました');
+  }
+}
+
+// ===== RECORD PAGE — BOOK SEARCH =====
+function renderRecordBookSearch() {
+  const q  = document.getElementById('recordBookSearch').value.trim().toLowerCase();
+  const el = document.getElementById('recordBookResults');
+  if (!q) { el.innerHTML = ''; return; }
+
+  if (shelf.length === 0) {
+    el.innerHTML = `<div style="color:#bbb;font-size:0.83rem;padding:8px 0 12px">
+      まずは「本棚」タブで絵本を登録してください</div>`;
+    return;
+  }
+  const hits = shelf.filter(b => b.title.toLowerCase().includes(q)).slice(0,6);
+  if (hits.length === 0) {
+    el.innerHTML = `<div style="color:#bbb;font-size:0.83rem;padding:8px 0 12px">本棚に見つかりませんでした</div>`;
+    return;
+  }
+  el.innerHTML = hits.map(b => {
+    const cv = b.cover ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    return `<div class="book-search-result" onclick="pickBookForRecord('${b.isbn}')">
+      <div class="bsr-cover">${cv}</div>
+      <div>
+        <div class="bsr-title">${esc(b.title)}</div>
+        <div class="bsr-author">${esc(b.author)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function pickBookForRecord(isbn) {
+  const book = shelf.find(b => b.isbn === isbn);
+  if (!book) return;
+  document.getElementById('recordBookSearch').value = '';
+  document.getElementById('recordBookResults').innerHTML = '';
+  openAddRecordModal(book);
+}
+
+// ===== ADD RECORD MODAL =====
+function openAddRecordModal(book) {
+  selectedShelfBook = book;
+  currentReader = '';
+  ['rb-son','rb-daughter','rb-both'].forEach(id => document.getElementById(id).className='reader-btn');
+  document.getElementById('ar-comment').value  = '';
+  document.getElementById('ar-date').valueAsDate = new Date();
+  document.getElementById('ar-title').textContent  = book.title;
+  document.getElementById('ar-author').textContent = book.author;
+  document.getElementById('ar-cover').innerHTML = book.cover
+    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+  document.getElementById('addRecordModal').classList.add('open');
+}
+function closeAddRecordModal() { document.getElementById('addRecordModal').classList.remove('open'); }
+
+function selectReader(who) {
+  currentReader = who;
+  document.getElementById('rb-son').className      = 'reader-btn' + (who==='son'      ? ' sel-son'      : '');
+  document.getElementById('rb-daughter').className = 'reader-btn' + (who==='daughter' ? ' sel-daughter' : '');
+  document.getElementById('rb-both').className     = 'reader-btn' + (who==='both'     ? ' sel-both'     : '');
+}
+
+function saveRecord() {
+  if (!currentReader)     { showToast('だれと読んだか選んでください'); return; }
+  if (!selectedShelfBook) { showToast('本を選んでください'); return; }
+  const rec = {
+    id:      Date.now(),
+    isbn:    selectedShelfBook.isbn,
+    title:   selectedShelfBook.title,
+    author:  selectedShelfBook.author,
+    cover:   selectedShelfBook.cover,
+    reader:  currentReader,
+    date:    document.getElementById('ar-date').value,
+    comment: document.getElementById('ar-comment').value.trim()
+  };
+  if (window._firebaseReady && window._fsAddRecord) {
+    window._fsAddRecord(rec)
+      .then(() => showToast('📖 読書を記録しました！'))
+      .catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); });
+  } else {
+    records.unshift(rec);
+    localStorage.setItem('ehon_records', JSON.stringify(records));
+    renderAll();
+    renderRecordList();
+    showToast('📖 読書を記録しました（オフライン）');
+  }
+  closeAddRecordModal();
+}
+
+// ===== RECORD LIST =====
+function setRecordFilter(f, btn) {
+  recordFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderRecordList();
+}
+
+function renderRecordList() {
+  const list = records.filter(r => {
+    if (recordFilter==='son')      return r.reader==='son'      || r.reader==='both';
+    if (recordFilter==='daughter') return r.reader==='daughter' || r.reader==='both';
+    if (recordFilter==='both')     return r.reader==='both';
+    return true;
+  });
+  const el = document.getElementById('recordList');
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">📖</div>
+      <div class="empty-text">まだ記録がありません<br>上の検索で本を選んで<br>記録をつけましょう！</div>
+    </div>`;
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const tag  = r.reader==='son'
+      ? '<span class="reader-tag tag-son">👦 越希</span>'
+      : r.reader==='daughter'
+      ? '<span class="reader-tag tag-daughter">👧 風美歩</span>'
+      : '<span class="reader-tag tag-both">👨‍👧‍👦 ふたり</span>';
+    const date = r.date ? r.date.replace(/-/g,'/') : '';
+    const cv   = r.cover ? `<img src="${r.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    const cmt  = r.comment ? `<div class="record-comment">💬 ${esc(r.comment)}</div>` : '';
+    return `<div class="record-card">
+      <div class="record-cover">${cv}</div>
+      <div class="record-body">
+        <div class="record-title">${esc(r.title)}</div>
+        <div class="record-meta">${tag}<span class="record-date">${date}</span></div>
+        ${cmt}
+      </div>
+      <button class="record-delete" onclick="deleteRecord(${r.id})">🗑️</button>
+    </div>`;
+  }).join('');
+}
+
+function deleteRecord(id) {
+  if (!confirm('この読書記録を削除しますか？')) return;
+  if (window._firebaseReady && window._fsDeleteRecord) {
+    window._fsDeleteRecord(id)
+      .then(() => {
+        if (detailBook) openBookDetail(detailBook.isbn);
+        showToast('🗑 記録を削除しました');
+      })
+      .catch(e => { console.error(e); showToast('⚠️ 削除に失敗しました'); });
+  } else {
+    records = records.filter(r => r.id !== id);
+    localStorage.setItem('ehon_records', JSON.stringify(records));
+    renderStats();
+    renderRecordList();
+    if (detailBook) openBookDetail(detailBook.isbn);
+  }
+}
+
+
+// ===== CSV EXPORT =====
+function csvEscape(v) {
+  v = String(v === null || v === undefined ? '' : v);
+  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+    v = '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
+function downloadCSV(filename, rows) {
+  var bom = '\uFEFF';
+  var csv = bom + rows.map(function(r) { return r.map(csvEscape).join(','); }).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('CSV を出力しました！');
+}
+
+function readerName(r) {
+  return r === 'son' ? '越希' : r === 'daughter' ? '風美歩' : 'ふたり';
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0,10).replace(/-/g,'');
+}
+
+function exportShelfCSV() {
+  if (shelf.length === 0) { showToast('本棚に本が登録されていません'); return; }
+  var header = ['タイトル', '著者', 'ISBN', '登録日'];
+  var rows   = shelf.map(function(b) {
+    return [b.title, b.author||'', b.isbn, b.addedAt||''];
+  });
+  downloadCSV('えほん本棚_' + todayStr() + '.csv', [header].concat(rows));
+}
+
+function exportRecordsCSV() {
+  if (records.length === 0) { showToast('読書記録がありません'); return; }
+  var header = ['タイトル', '著者', 'ISBN', '読んだ日', '読んだ人', 'コメント'];
+  var rows   = records.map(function(r) {
+    return [r.title, r.author||'', r.isbn, r.date||'', readerName(r.reader), r.comment||''];
+  });
+  downloadCSV('えほん読書きろく_' + todayStr() + '.csv', [header].concat(rows));
+}
+
+function exportAllCSV() {
+  if (shelf.length === 0 && records.length === 0) { showToast('データがありません'); return; }
+  var rows = [];
+  rows.push(['【本棚データ】', '', '', '', '', '']);
+  rows.push(['タイトル', '著者', 'ISBN', '登録日', '', '']);
+  shelf.forEach(function(b) {
+    rows.push([b.title, b.author||'', b.isbn, b.addedAt||'', '', '']);
+  });
+  rows.push(['', '', '', '', '', '']);
+  rows.push(['【読書きろく】', '', '', '', '', '']);
+  rows.push(['タイトル', '著者', 'ISBN', '読んだ日', '読んだ人', 'コメント']);
+  records.forEach(function(r) {
+    rows.push([r.title, r.author||'', r.isbn, r.date||'', readerName(r.reader), r.comment||'']);
+  });
+  downloadCSV('えほんきろく_全データ_' + todayStr() + '.csv', rows);
+}
+
+// ===== UTILS =====
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
