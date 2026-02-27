@@ -666,6 +666,10 @@ body {
         <div class="b-isbn"   id="as-isbn"></div>
       </div>
     </div>
+    <div class="borrowed-check-row" id="as-borrowedRow" onclick="toggleShelfBorrowed()" style="margin-bottom:0">
+      <input type="checkbox" id="as-borrowed" onclick="event.stopPropagation()">
+      <span class="borrowed-check-label">📚 図書館・借りた本</span>
+    </div>
     <button class="btn-primary" id="as-saveBtn" onclick="saveToShelf()" disabled>📦 本棚に登録する</button>
     <button class="btn-cancel" onclick="closeAddShelfModal()">キャンセル</button>
   </div>
@@ -783,11 +787,13 @@ function renderShelf() {
   grid.innerHTML = list.map(b => {
     const cnt = records.filter(r => r.isbn === b.isbn).length;
     const cv  = b.cover ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    const borrowedBadge = b.borrowed ? '<div style="font-size:0.6rem;color:#E65100;margin-top:2px">📚 借りた本</div>' : '';
     return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
       <div class="book-thumb-cover">${cv}</div>
       <div class="book-thumb-info">
         <div class="book-thumb-title">${esc(b.title)}</div>
         <div class="book-thumb-count">${cnt > 0 ? `📖 ${cnt}回` : '未読'}</div>
+        ${borrowedBadge}
       </div>
     </div>`;
   }).join('');
@@ -943,6 +949,8 @@ async function fetchAndOpenShelfModal(isbn) {
   document.getElementById('as-isbn').textContent  = 'ISBN: ' + isbn;
   document.getElementById('as-cover').innerHTML   = '📚';
   document.getElementById('as-saveBtn').disabled  = true;
+  document.getElementById('as-borrowed').checked  = false;
+  document.getElementById('as-borrowedRow').classList.remove('checked');
   document.getElementById('addShelfModal').classList.add('open');
   currentBookData = null;
 
@@ -963,7 +971,8 @@ async function fetchAndOpenShelfModal(isbn) {
 function closeAddShelfModal() { document.getElementById('addShelfModal').classList.remove('open'); }
 function saveToShelf() {
   if (!currentBookData) return;
-  currentBookData.addedAt = new Date().toISOString().slice(0,10);
+  currentBookData.addedAt   = new Date().toISOString().slice(0,10);
+  currentBookData.borrowed  = document.getElementById('as-borrowed').checked;
   if (window._firebaseReady && window._fsAddShelf) {
     window._fsAddShelf(currentBookData)
       .then(() => showToast('📦 本棚に登録しました！'))
@@ -985,7 +994,8 @@ function openBookDetail(isbn) {
   detailBook = book;
   document.getElementById('bd-title').textContent  = book.title;
   document.getElementById('bd-author').textContent = book.author;
-  document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '');
+  const borrowedTxt = book.borrowed ? '  📚 借りた本' : '';
+  document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '') + borrowedTxt;
   document.getElementById('bd-cover').innerHTML    = book.cover
     ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
 
@@ -1089,6 +1099,13 @@ function closeAddRecordModal() { document.getElementById('addRecordModal').class
 function toggleBorrowed() {
   const cb  = document.getElementById('ar-borrowed');
   const row = document.getElementById('borrowedRow');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+}
+
+function toggleShelfBorrowed() {
+  const cb  = document.getElementById('as-borrowed');
+  const row = document.getElementById('as-borrowedRow');
   cb.checked = !cb.checked;
   row.classList.toggle('checked', cb.checked);
 }
