@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>えほんきろく</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -438,6 +438,44 @@ body {
 }
 .export-btn:active { transform: scale(0.96); }
 
+/* MONTH SELECTOR */
+.month-selector {
+  display: flex; align-items: center; gap: 10px;
+  background: white; border-radius: 14px; padding: 12px 16px;
+  margin-bottom: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.month-nav-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.3rem; color: var(--navy); padding: 2px 6px;
+  border-radius: 8px; transition: background 0.15s;
+}
+.month-nav-btn:hover { background: var(--warm); }
+.month-label {
+  flex: 1; text-align: center;
+  font-family: 'Nunito', sans-serif; font-weight: 900;
+  font-size: 1rem; color: var(--navy);
+}
+.month-all-btn {
+  font-size: 0.72rem; color: #aaa; background: none; border: none;
+  cursor: pointer; font-family: 'Kosugi Maru', sans-serif;
+  padding: 4px 8px; border-radius: 8px; border: 1px solid #e0d8cc;
+}
+.month-all-btn.active { background: var(--navy); color: white; border-color: var(--navy); }
+.month-count { font-size: 0.72rem; color: #bbb; margin-left: 4px; }
+
+/* BORROWED TAG */
+.tag-borrowed { background: #FFF3E0; color: #E65100; }
+.borrowed-check-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 14px;
+  background: white; border-radius: 13px;
+  cursor: pointer; border: 2px solid var(--warm);
+  transition: border-color 0.2s;
+}
+.borrowed-check-row.checked { border-color: #E65100; background: #FFF8F0; }
+.borrowed-check-row input[type=checkbox] { width: 20px; height: 20px; cursor: pointer; accent-color: #E65100; }
+.borrowed-check-label { font-size: 0.9rem; color: #555; cursor: pointer; }
+
 /* TOAST */
 .toast {
   position: fixed; bottom: 90px; left: 50%;
@@ -520,6 +558,15 @@ body {
 
   <hr style="border:none;border-top:1px solid #f0e8dc;margin:18px 0 14px">
   <div class="section-title" style="font-size:0.95rem">📋 読書きろく一覧</div>
+
+  <!-- 月ナビゲーター -->
+  <div class="month-selector">
+    <button class="month-nav-btn" onclick="changeMonth(-1)">‹</button>
+    <div class="month-label" id="monthLabel">すべて</div>
+    <button class="month-nav-btn" onclick="changeMonth(1)">›</button>
+    <button class="month-all-btn active" id="monthAllBtn" onclick="resetMonth()">全期間</button>
+  </div>
+
   <div class="filter-row">
     <button class="filter-btn active" onclick="setRecordFilter('all',this)">すべて</button>
     <button class="filter-btn" onclick="setRecordFilter('son',this)">👦 越希</button>
@@ -583,9 +630,9 @@ body {
 <!-- CAMERA MODAL -->
 <div class="camera-modal" id="cameraModal">
   <div id="scanner-container">
-    <div class="scan-overlay">
-      <div class="scan-frame"><div class="scan-line"></div></div>
-      <div class="scan-hint">バーコードを枠に合わせてください</div>
+    <div id="qr-reader" style="width:100%;height:100%"></div>
+    <div class="scan-overlay" style="pointer-events:none">
+      <div class="scan-hint" style="margin-top:auto;margin-bottom:40px;background:rgba(0,0,0,0.5);padding:8px 16px;border-radius:20px">バーコードをカメラに向けてください</div>
     </div>
   </div>
   <button class="camera-close" onclick="closeCamera()">✕ キャンセル</button>
@@ -650,6 +697,11 @@ body {
     <div class="field-label">ひとこと（任意）</div>
     <textarea class="field-textarea" id="ar-comment" placeholder="感想やメモ... 🌟"></textarea>
 
+    <div class="borrowed-check-row" id="borrowedRow" onclick="toggleBorrowed()">
+      <input type="checkbox" id="ar-borrowed" onclick="event.stopPropagation()">
+      <span class="borrowed-check-label">📚 図書館・借りた本</span>
+    </div>
+
     <button class="btn-primary" onclick="saveRecord()">💾 記録する</button>
     <button class="btn-cancel"  onclick="closeAddRecordModal()">キャンセル</button>
   </div>
@@ -688,6 +740,7 @@ let currentReader     = '';
 let selectedShelfBook = null;
 let detailBook        = null;
 let recordFilter      = 'all';
+let currentMonth      = null; // null=全期間, 'YYYY-MM'=特定月
 let scannerRunning    = false;
 
 // ===== INIT =====
@@ -741,30 +794,45 @@ function renderShelf() {
 }
 
 // ===== CAMERA =====
+let html5QrCode = null;
+
 function openScanModal() {
   document.getElementById('cameraModal').classList.add('open');
-  Quagga.init({
-    inputStream: { name:'Live', type:'LiveStream',
-      target: document.getElementById('scanner-container'),
-      constraints: { facingMode: 'environment' }
-    },
-    decoder: { readers: ['ean_reader','ean_8_reader'] }
-  }, err => {
-    if (err) { closeCamera(); showToast('カメラを開けませんでした'); return; }
-    Quagga.start(); scannerRunning = true;
-  });
-  Quagga.onDetected(r => {
-    const code = r.codeResult.code;
-    if (code && code.length >= 10) {
-      Quagga.stop(); scannerRunning = false;
-      closeCamera();
-      fetchAndOpenShelfModal(code);
-    }
-  });
+  // 既存インスタンスを破棄
+  if (html5QrCode) {
+    html5QrCode.stop().catch(()=>{}).finally(() => startHtml5Qr());
+  } else {
+    startHtml5Qr();
+  }
 }
+
+function startHtml5Qr() {
+  html5QrCode = new Html5Qrcode('qr-reader');
+  html5QrCode.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 250, height: 120 }, aspectRatio: 1.5,
+      formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8] },
+    (code) => {
+      if (code && code.length >= 10) {
+        closeCamera();
+        fetchAndOpenShelfModal(code);
+      }
+    },
+    () => {} // エラーは無視（読み取り中の失敗は頻繁に起きる）
+  ).catch(err => {
+    closeCamera();
+    showToast('カメラを開けませんでした。ISBN手入力をご利用ください');
+    console.error('カメラエラー:', err);
+  });
+  scannerRunning = true;
+}
+
 function closeCamera() {
-  if (scannerRunning) { Quagga.stop(); scannerRunning = false; }
   document.getElementById('cameraModal').classList.remove('open');
+  if (html5QrCode && scannerRunning) {
+    html5QrCode.stop().catch(()=>{});
+    scannerRunning = false;
+  }
 }
 
 // ===== ISBN MODAL =====
@@ -1008,6 +1076,8 @@ function openAddRecordModal(book) {
   ['rb-son','rb-daughter','rb-both'].forEach(id => document.getElementById(id).className='reader-btn');
   document.getElementById('ar-comment').value  = '';
   document.getElementById('ar-date').valueAsDate = new Date();
+  document.getElementById('ar-borrowed').checked = false;
+  document.getElementById('borrowedRow').classList.remove('checked');
   document.getElementById('ar-title').textContent  = book.title;
   document.getElementById('ar-author').textContent = book.author;
   document.getElementById('ar-cover').innerHTML = book.cover
@@ -1015,6 +1085,13 @@ function openAddRecordModal(book) {
   document.getElementById('addRecordModal').classList.add('open');
 }
 function closeAddRecordModal() { document.getElementById('addRecordModal').classList.remove('open'); }
+
+function toggleBorrowed() {
+  const cb  = document.getElementById('ar-borrowed');
+  const row = document.getElementById('borrowedRow');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+}
 
 function selectReader(who) {
   currentReader = who;
@@ -1027,14 +1104,15 @@ function saveRecord() {
   if (!currentReader)     { showToast('だれと読んだか選んでください'); return; }
   if (!selectedShelfBook) { showToast('本を選んでください'); return; }
   const rec = {
-    id:      Date.now(),
-    isbn:    selectedShelfBook.isbn,
-    title:   selectedShelfBook.title,
-    author:  selectedShelfBook.author,
-    cover:   selectedShelfBook.cover,
-    reader:  currentReader,
-    date:    document.getElementById('ar-date').value,
-    comment: document.getElementById('ar-comment').value.trim()
+    id:       Date.now(),
+    isbn:     selectedShelfBook.isbn,
+    title:    selectedShelfBook.title,
+    author:   selectedShelfBook.author,
+    cover:    selectedShelfBook.cover,
+    reader:   currentReader,
+    date:     document.getElementById('ar-date').value,
+    comment:  document.getElementById('ar-comment').value.trim(),
+    borrowed: document.getElementById('ar-borrowed').checked
   };
   if (window._firebaseReady && window._fsAddRecord) {
     window._fsAddRecord(rec)
@@ -1051,6 +1129,49 @@ function saveRecord() {
 }
 
 // ===== RECORD LIST =====
+// ===== MONTH FILTER =====
+function getAvailableMonths() {
+  const months = [...new Set(records.map(r => r.date ? r.date.slice(0,7) : null).filter(Boolean))];
+  return months.sort().reverse(); // 新しい順
+}
+
+function changeMonth(dir) {
+  const months = getAvailableMonths();
+  if (months.length === 0) return;
+  if (!currentMonth) {
+    // 全期間→dirが-1なら最新月、+1なら最古月
+    currentMonth = dir < 0 ? months[0] : months[months.length - 1];
+  } else {
+    const idx = months.indexOf(currentMonth);
+    const next = idx + (-dir); // 配列は新しい順なので逆
+    if (next < 0 || next >= months.length) return;
+    currentMonth = months[next];
+  }
+  updateMonthLabel();
+  renderRecordList();
+}
+
+function resetMonth() {
+  currentMonth = null;
+  updateMonthLabel();
+  renderRecordList();
+}
+
+function updateMonthLabel() {
+  const lbl = document.getElementById('monthLabel');
+  const btn = document.getElementById('monthAllBtn');
+  if (!lbl || !btn) return;
+  if (!currentMonth) {
+    lbl.textContent = '全期間';
+    btn.classList.add('active');
+  } else {
+    const [y, m] = currentMonth.split('-');
+    const cnt = records.filter(r => r.date && r.date.startsWith(currentMonth)).length;
+    lbl.textContent = y + '年' + parseInt(m) + '月  (' + cnt + '冊)';
+    btn.classList.remove('active');
+  }
+}
+
 function setRecordFilter(f, btn) {
   recordFilter = f;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -1059,17 +1180,21 @@ function setRecordFilter(f, btn) {
 }
 
 function renderRecordList() {
-  const list = records.filter(r => {
+  let list = records.filter(r => {
     if (recordFilter==='son')      return r.reader==='son'      || r.reader==='both';
     if (recordFilter==='daughter') return r.reader==='daughter' || r.reader==='both';
     if (recordFilter==='both')     return r.reader==='both';
     return true;
   });
+  // 月フィルター
+  if (currentMonth) {
+    list = list.filter(r => r.date && r.date.startsWith(currentMonth));
+  }
   const el = document.getElementById('recordList');
   if (list.length === 0) {
     el.innerHTML = `<div class="empty-state">
       <div class="empty-icon">📖</div>
-      <div class="empty-text">まだ記録がありません<br>上の検索で本を選んで<br>記録をつけましょう！</div>
+      <div class="empty-text">${currentMonth ? 'この月の記録はありません' : 'まだ記録がありません<br>上の検索で本を選んで<br>記録をつけましょう！'}</div>
     </div>`;
     return;
   }
@@ -1079,6 +1204,7 @@ function renderRecordList() {
       : r.reader==='daughter'
       ? '<span class="reader-tag tag-daughter">👧 風美歩</span>'
       : '<span class="reader-tag tag-both">👨‍👧‍👦 ふたり</span>';
+    const borrowed = r.borrowed ? '<span class="reader-tag tag-borrowed">📚 借りた本</span>' : '';
     const date = r.date ? r.date.replace(/-/g,'/') : '';
     const cv   = r.cover ? `<img src="${r.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
     const cmt  = r.comment ? `<div class="record-comment">💬 ${esc(r.comment)}</div>` : '';
@@ -1086,7 +1212,7 @@ function renderRecordList() {
       <div class="record-cover">${cv}</div>
       <div class="record-body">
         <div class="record-title">${esc(r.title)}</div>
-        <div class="record-meta">${tag}<span class="record-date">${date}</span></div>
+        <div class="record-meta">${tag}${borrowed}<span class="record-date">${date}</span></div>
         ${cmt}
       </div>
       <button class="record-delete" onclick="deleteRecord(${r.id})">🗑️</button>
