@@ -861,22 +861,23 @@ async function fetchBook(isbn) {
   let title=null, author=null, cover=null;
   const log=[];
 
-  // 1) Google Books
+  // 1) openBD（日本書籍に最強・登録不要・高速）
   try {
-    const res  = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    const res  = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
     const data = await res.json();
-    log.push(`[GB] items=${data.totalItems}`);
-    if (data.items?.length > 0) {
-      const info = data.items[0].volumeInfo;
-      title  = info.title || null;
-      author = (info.authors||[]).join(', ') || null;
-      const il = info.imageLinks||{};
-      const raw= il.medium||il.small||il.thumbnail||il.smallThumbnail||null;
-      if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','');
+    const item = data[0];
+    log.push(`[openBD] found=${!!item}`);
+    if (item) {
+      const s = item.summary || {};
+      title  = s.title  || null;
+      author = s.author || null;
+      cover  = s.cover  || null;
+      // coverが空文字の場合はnullに
+      if (!cover) cover = null;
     }
-  } catch(e) { log.push(`[GB] err`); }
+  } catch(e) { log.push(`[openBD] err: ${e.message}`); }
 
-  // 2) NDL
+  // 2) NDL OpenSearch（openBDにない本の補完）
   if (!title) {
     try {
       const res  = await fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=3&mediatype=1`);
@@ -895,7 +896,26 @@ async function fetchBook(isbn) {
     } catch(e) { log.push(`[NDL] err`); }
   }
 
-  // 3) Open Library 書誌
+  // 3) Google Books（洋書・NDLにもない場合の最終手段）
+  if (!title) {
+    try {
+      const res  = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+      const data = await res.json();
+      log.push(`[GB] items=${data.totalItems}`);
+      if (data.items?.length > 0) {
+        const info = data.items[0].volumeInfo;
+        title  = info.title || null;
+        author = author || (info.authors||[]).join(', ') || null;
+        if (!cover) {
+          const il = info.imageLinks||{};
+          const raw= il.medium||il.small||il.thumbnail||il.smallThumbnail||null;
+          if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','');
+        }
+      }
+    } catch(e) { log.push(`[GB] err`); }
+  }
+
+  // 4) Open Library（さらに補完）
   if (!title) {
     try {
       const res  = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
@@ -910,7 +930,7 @@ async function fetchBook(isbn) {
     } catch(e) { log.push(`[OL] err`); }
   }
 
-  // 4) Open Library カバー補完
+  // 5) Open Library カバー画像補完（表紙がまだなければ）
   if (!cover) {
     const url = `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`;
     const ok  = await imgExists(url);
