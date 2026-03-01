@@ -639,7 +639,10 @@ body {
     </button>
   </div>
 
-  <div class="section-title">🗄 登録済みの絵本（<span id="shelfCount">0</span>冊）</div>
+  <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+    <span>🗄 登録済みの絵本（<span id="shelfCount">0</span>冊）</span>
+    <button onclick="backfillMissingCovers(true)" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📷 表紙を再取得</button>
+  </div>
   <div class="search-wrap">
     <span class="search-icon">🔍</span>
     <input class="search-input" id="shelfSearch" placeholder="タイトルで絞り込む..." oninput="renderShelf()">
@@ -1224,10 +1227,16 @@ async function fetchBook(isbn) {
     log.push(`[GB] found`);
     if (!title)  title  = info.title || null;
     if (!author) author = (info.authors||[]).join(', ') || null;
-    if (!cover) {
-      const il  = info.imageLinks || {};
+    if (!cover && info.imageLinks) {
+      const il  = info.imageLinks;
+      // zoom=2以上を優先（より高解像度）
       const raw = il.medium || il.small || il.thumbnail || il.smallThumbnail || null;
-      if (raw) cover = raw.replace('http:','https:').replace('zoom=1','zoom=3').replace('&edge=curl','');
+      if (raw) {
+        const candidate = raw.replace('http:','https:').replace('zoom=1','zoom=2').replace('&edge=curl','');
+        // プレースホルダーでないことを確認
+        const ok = await imgIsReal(candidate);
+        if (ok) cover = candidate;
+      }
     }
   }
 
@@ -1405,63 +1414,135 @@ async function searchBooksByTitle(query) {
   return results;
 }
 
-function imgExists(url) {
-  return new Promise(r => {
-    const i = new Image();
-    i.onload  = () => r(i.naturalWidth > 1 && i.naturalHeight > 1);
-    i.onerror = () => r(false);
-    i.src = url;
+// 画像URLが「実在する書影」かどうかを判定
+// プレースホルダーやデフォルト画像を除外する
+function imgIsReal(url) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+
+      // 読み込めなかった or 極小
+      if (w < 10 || h < 10) { resolve(false); return; }
+
+      // Open Library のデフォルト緑画像: 120×187 or 128×197 固定サイズ
+      if ((w === 120 && h === 187) || (w === 128 && h === 197) || (w === 1 && h === 1)) {
+        resolve(false); return;
+      }
+
+      // Google Books "image not available" プレースホルダー
+      // → 幅128px・高さ168pxの固定サイズ
+      if (w === 128 && h === 168) { resolve(false); return; }
+      // → 幅80px以下は小さすぎて書影として使えない
+      if (w < 80) { resolve(false); return; }
+
+      // canvas でピクセル分析（CORSが通る場合のみ）
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.min(w, 10);
+        canvas.height = Math.min(h, 10);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+        // 全ピクセルがほぼ同色（単色）なら偽画像
+        let rSum=0, gSum=0, bSum=0;
+        const px = data.length / 4;
+        for (let i = 0; i < data.length; i += 4) {
+          rSum += data[i]; gSum += data[i+1]; bSum += data[i+2];
+        }
+        const rAvg = rSum/px, gAvg = gSum/px, bAvg = bSum/px;
+        let variance = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          variance += Math.abs(data[i]-rAvg) + Math.abs(data[i+1]-gAvg) + Math.abs(data[i+2]-bAvg);
+        }
+        variance /= px;
+        // 分散が極めて低い（ほぼ単色）→ プレースホルダーの可能性が高い
+        if (variance < 8) { resolve(false); return; }
+      } catch(e) {
+        // CORS エラーは無視してサイズ判定だけで通す
+      }
+
+      resolve(true);
+    };
+
+    img.onerror = () => resolve(false);
+    img.src = url;
   });
 }
 
+// 後方互換のためのエイリアス
+function imgExists(url) { return imgIsReal(url); }
+
 // ===== 表紙一括補完 =====
-// 登録済み本のうち表紙なし・ISBNありのものをバックグラウンドで補完
-async function backfillMissingCovers() {
-  const targets = shelf.filter(b => !b.cover && b.isbn);
-  if (targets.length === 0) return;
-  console.log(`[えほんきろく] 表紙補完対象: ${targets.length}冊`);
+// forceAll=true: 既存の表紙URLも再チェックして偽画像を差し替え
+async function backfillMissingCovers(forceAll = false) {
+  // 対象：ISBNあり、かつ（表紙なし or forceAll）
+  const targets = shelf.filter(b => b.isbn && (forceAll || !b.cover));
+  if (targets.length === 0) {
+    if (forceAll) showToast('対象の本がありません');
+    return;
+  }
+  console.log(`[えほんきろく] 表紙チェック対象: ${targets.length}冊 (forceAll=${forceAll})`);
+  if (forceAll) showToast(`🔍 ${targets.length}冊の表紙を再チェック中...`);
 
   let updated = 0;
   for (const book of targets) {
-    const isbn = String(book.isbn).replace(/[^0-9X]/g,'');
+    const isbn  = String(book.isbn).replace(/[^0-9X]/g,'');
     if (!isbn || isbn.length < 10) continue;
     const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
 
-    // 複数ソースを順番に試す
+    // 既存の表紙URLが本物かチェック（forceAll時のみ）
+    if (forceAll && book.cover) {
+      const stillGood = await imgIsReal(book.cover);
+      if (stillGood) continue; // 本物ならスキップ
+      console.log(`[えほんきろく] 偽画像検出: ${book.title}`);
+    }
+
+    // 複数ソースを順番に試す（imgIsReal でプレースホルダーを除外）
     const candidates = [
       `https://cover.openbd.jp/${isbn13}.jpg`,
       `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
       `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
-      `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=3&source=gbs_api`,
+      `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
     ];
 
     let foundCover = null;
     for (const url of candidates) {
-      const ok = await imgExists(url);
+      const ok = await imgIsReal(url);
       if (ok) { foundCover = url; break; }
     }
 
-    if (foundCover) {
+    if (foundCover && foundCover !== book.cover) {
       book.cover = foundCover;
-      // Firebase に保存
       if (window._firebaseReady && window._fsAddShelf) {
         await window._fsAddShelf(book).catch(() => {});
       } else {
         localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
       }
       updated++;
-      // UIを即座に更新（待たずに表示を切り替え）
       renderShelf();
-      console.log(`[えほんきろく] 表紙補完: ${book.title}`);
+      console.log(`[えほんきろく] 表紙更新: ${book.title}`);
+    } else if (!foundCover && book.cover) {
+      // 本物の表紙が見つからなかった → 偽画像をクリア
+      book.cover = null;
+      if (window._firebaseReady && window._fsAddShelf) {
+        await window._fsAddShelf(book).catch(() => {});
+      }
+      renderShelf();
     }
 
-    // API負荷軽減のため少し待つ
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 250));
   }
 
   if (updated > 0) {
-    showToast(`📷 ${updated}冊の表紙画像を取得しました`);
+    showToast(`📷 ${updated}冊の表紙を更新しました`);
     renderAll();
+  } else if (forceAll) {
+    showToast('✅ 表紙の確認が完了しました');
   }
 }
 
