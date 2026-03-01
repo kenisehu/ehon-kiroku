@@ -943,7 +943,7 @@ function renderShelf() {
   }
   grid.innerHTML = list.map(b => {
     const cnt = records.filter(r => r.isbn === b.isbn).length;
-    const cv  = b.cover ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    const cv  = coverImgHtml(b.cover, b.coverFallbacks, '');
     const borrowedBadge = b.borrowed ? '<div style="font-size:0.6rem;color:#E65100;margin-top:2px">📚 借りた本</div>' : '';
     return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
       <div class="book-thumb-cover">${cv}</div>
@@ -1196,94 +1196,77 @@ function lookupFromIsbnModal() {
 }
 
 // ===== FETCH BOOK =====
+// 書誌情報を取得する。表紙はURLを渡すだけ（imgIsReal確認はしない）
+// → img onerrorで次の候補にフォールバックする方式
 async function fetchBook(isbn) {
   isbn = String(isbn).replace(/[^0-9X]/g,'');
   if (!isbn || isbn.length < 10) return null;
+  const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
   let title=null, author=null, cover=null;
   const log=[];
 
-  // --- 書誌情報とカバーを並列取得 ---
+  // 3APIを並列取得（待ち時間を最小化）
   const [obdRes, gbRes, ndlRes] = await Promise.allSettled([
-    fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`).then(r=>r.json()),
-    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`).then(r=>r.json()),
-    fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=1&mediatype=1`).then(r=>r.text()),
+    fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`).then(r=>r.json()),
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`).then(r=>r.json()),
+    fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn13}&cnt=1&mediatype=1`).then(r=>r.text()),
   ]);
 
-  // 1) openBD（日本書籍に最強）
-  if (obdRes.status === 'fulfilled') {
-    const item = obdRes.value?.[0];
-    log.push(`[openBD] found=${!!item}`);
-    if (item) {
-      const s = item.summary || {};
-      title  = s.title  || null;
-      author = s.author || null;
-      cover  = (s.cover && s.cover.length > 10) ? s.cover : null;
-    }
+  // 1) openBD — 日本の絵本に最強、表紙URLも信頼性高い
+  if (obdRes.status === 'fulfilled' && obdRes.value?.[0]) {
+    const s = obdRes.value[0].summary || {};
+    title  = s.title  || null;
+    author = s.author || null;
+    // cover.openbd.jp は openBD summary.cover より安定している
+    cover  = `https://cover.openbd.jp/${isbn13}.jpg`;
+    log.push(`[openBD] ${title ? 'hit' : 'no title'}`);
   }
 
-  // 2) Google Books（書誌・表紙補完）
+  // 2) Google Books — 書誌補完・表紙補完
   if (gbRes.status === 'fulfilled' && gbRes.value?.items?.length > 0) {
     const info = gbRes.value.items[0].volumeInfo;
-    log.push(`[GB] found`);
+    log.push('[GB] hit');
     if (!title)  title  = info.title || null;
     if (!author) author = (info.authors||[]).join(', ') || null;
+    // GBの表紙URLをフォールバック候補として保持
     if (!cover && info.imageLinks) {
       const il  = info.imageLinks;
-      // zoom=2以上を優先（より高解像度）
       const raw = il.medium || il.small || il.thumbnail || il.smallThumbnail || null;
-      if (raw) {
-        const candidate = raw.replace('http:','https:').replace('zoom=1','zoom=2').replace('&edge=curl','');
-        // プレースホルダーでないことを確認
-        const ok = await imgIsReal(candidate);
-        if (ok) cover = candidate;
-      }
+      if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','').replace('zoom=1','zoom=2');
     }
   }
 
-  // 3) NDL（書誌補完）
+  // 3) NDL — 書誌補完
   if (!title && ndlRes.status === 'fulfilled') {
     try {
-      const xml   = new DOMParser().parseFromString(ndlRes.value, 'application/xml');
-      const items = xml.querySelectorAll('item');
-      log.push(`[NDL] items=${items.length}`);
-      if (items.length > 0) {
-        const t = items[0].querySelector('title');
-        const c = items[0].getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','creator');
-        if (t?.textContent?.trim()) {
-          title  = t.textContent.trim();
-          author = author || c[0]?.textContent?.trim() || null;
-        }
+      const xml  = new DOMParser().parseFromString(ndlRes.value, 'application/xml');
+      const item = xml.querySelector('item');
+      if (item) {
+        const t = item.querySelector('title');
+        const c = item.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','creator');
+        title  = t?.textContent?.trim() || null;
+        author = author || c[0]?.textContent?.trim() || null;
+        log.push(`[NDL] ${title ? 'hit' : 'no title'}`);
+        // NDL書影
+        if (!cover) cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
       }
-    } catch(e) { log.push('[NDL] parse err'); }
+    } catch(e) { log.push('[NDL] err'); }
   }
 
-  // 4) 表紙がまだない → 複数ソースを並列チェック
-  if (!cover && title) {
-    const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
-    const coverCandidates = await Promise.allSettled([
-      // openBD サムネイル URL パターン
-      imgExists(`https://cover.openbd.jp/${isbn13}.jpg`),
-      // Open Library
-      imgExists(`https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`),
-      // Google Books thumbnail（直接URL）
-      imgExists(`https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=3&source=gbs_api`),
-    ]);
-    const coverUrls = [
-      `https://cover.openbd.jp/${isbn13}.jpg`,
-      `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
-      `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=3&source=gbs_api`,
-    ];
-    for (let i = 0; i < coverCandidates.length; i++) {
-      if (coverCandidates[i].status === 'fulfilled' && coverCandidates[i].value) {
-        cover = coverUrls[i];
-        log.push(`[cover fallback] ${i}`);
-        break;
-      }
-    }
+  // 表紙候補リスト（img onerror で順番にフォールバックするためdata属性に埋め込む）
+  const coverFallbacks = [
+    `https://cover.openbd.jp/${isbn13}.jpg`,
+    `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
+    `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
+    `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
+  ];
+  // GBのAPI経由URLを先頭候補として追加（取れていれば）
+  if (cover && cover.includes('googleapis') === false && cover.includes('google.com') === false) {
+    // openBD/NDLのURLが既にある → それが先頭
   }
 
-  console.log('[えほんきろく]', isbn, log.join(' | '), '→', title, cover ? '📷' : '');
-  return title ? { isbn, title, author:author||'', cover:cover||null } : null;
+  console.log('[えほんきろく]', isbn13, log.join(' | '), '→', title);
+  return title ? { isbn: isbn13, title, author:author||'', cover, coverFallbacks } : null;
 }
 
 // ===== TITLE SEARCH =====
@@ -1414,67 +1397,54 @@ async function searchBooksByTitle(query) {
   return results;
 }
 
-// 画像URLが「実在する書影」かどうかを判定
-// プレースホルダーやデフォルト画像を除外する
+// ===== COVER IMAGE HELPER =====
+// 表紙画像HTML生成：onerrorで候補URLを順番に試すフォールバック方式
+// data-fallbacks に JSON配列で候補URLを渡す
+function coverImgHtml(cover, fallbacks, cls='') {
+  const fb = JSON.stringify(fallbacks || []).replace(/"/g, '&quot;');
+  if (!cover && (!fallbacks || fallbacks.length === 0)) return '📚';
+  const src = cover || (fallbacks && fallbacks[0]) || '';
+  return `<img src="${src}" class="${cls}" alt=""
+    data-fallbacks="${fb}" data-fb-idx="0"
+    onerror="nextCoverFallback(this)"
+    onload="this.style.opacity=1"
+    style="opacity:0;transition:opacity 0.3s">`;
+}
+
+function nextCoverFallback(img) {
+  const fallbacks = JSON.parse(img.dataset.fallbacks || '[]');
+  let idx = parseInt(img.dataset.fbIdx || '0') + 1;
+  // 既に試したURLと現在のsrcを除外
+  while (idx < fallbacks.length) {
+    const next = fallbacks[idx];
+    if (next && next !== img.src) {
+      img.dataset.fbIdx = idx;
+      img.src = next;
+      return;
+    }
+    idx++;
+  }
+  // 全候補失敗 → 絵文字に差し替え
+  img.outerHTML = '<span style="font-size:2rem">📚</span>';
+}
+
+// 画像URLが有効な書影かどうか判定（crossOriginなし・シンプルなサイズ判定のみ）
 function imgIsReal(url) {
   return new Promise(resolve => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
-
+    const timer = setTimeout(() => { img.src = ''; resolve(false); }, 6000);
     img.onload = () => {
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-
-      // 読み込めなかった or 極小
-      if (w < 10 || h < 10) { resolve(false); return; }
-
-      // Open Library のデフォルト緑画像: 120×187 or 128×197 固定サイズ
-      if ((w === 120 && h === 187) || (w === 128 && h === 197) || (w === 1 && h === 1)) {
-        resolve(false); return;
-      }
-
-      // Google Books "image not available" プレースホルダー
-      // → 幅128px・高さ168pxの固定サイズ
-      if (w === 128 && h === 168) { resolve(false); return; }
-      // → 幅80px以下は小さすぎて書影として使えない
-      if (w < 80) { resolve(false); return; }
-
-      // canvas でピクセル分析（CORSが通る場合のみ）
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width  = Math.min(w, 10);
-        canvas.height = Math.min(h, 10);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-
-        // 全ピクセルがほぼ同色（単色）なら偽画像
-        let rSum=0, gSum=0, bSum=0;
-        const px = data.length / 4;
-        for (let i = 0; i < data.length; i += 4) {
-          rSum += data[i]; gSum += data[i+1]; bSum += data[i+2];
-        }
-        const rAvg = rSum/px, gAvg = gSum/px, bAvg = bSum/px;
-        let variance = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          variance += Math.abs(data[i]-rAvg) + Math.abs(data[i+1]-gAvg) + Math.abs(data[i+2]-bAvg);
-        }
-        variance /= px;
-        // 分散が極めて低い（ほぼ単色）→ プレースホルダーの可能性が高い
-        if (variance < 8) { resolve(false); return; }
-      } catch(e) {
-        // CORS エラーは無視してサイズ判定だけで通す
-      }
-
+      clearTimeout(timer);
+      const w = img.naturalWidth, h = img.naturalHeight;
+      if (w < 50 || h < 50)                              { resolve(false); return; }
+      if (w === 120 && h === 187)                         { resolve(false); return; } // OL緑
+      if (w === 128 && (h === 197 || h === 168))          { resolve(false); return; } // OL緑 / GB not available
       resolve(true);
     };
-
-    img.onerror = () => resolve(false);
+    img.onerror = () => { clearTimeout(timer); resolve(false); };
     img.src = url;
   });
 }
-
-// 後方互換のためのエイリアス
 function imgExists(url) { return imgIsReal(url); }
 
 // ===== 表紙一括補完 =====
@@ -1509,15 +1479,15 @@ async function backfillMissingCovers(forceAll = false) {
       `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
       `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
     ];
+    // coverFallbacksとして保存（imgIsReal確認なし・表示時にonerrorで試す）
+    book.coverFallbacks = candidates;
 
-    let foundCover = null;
-    for (const url of candidates) {
-      const ok = await imgIsReal(url);
-      if (ok) { foundCover = url; break; }
+    if (!book.cover || forceAll) {
+      // 先頭候補をcoverとして設定
+      book.cover = candidates[0];
     }
-
-    if (foundCover && foundCover !== book.cover) {
-      book.cover = foundCover;
+    const foundCover = book.cover;
+    if (foundCover) {
       if (window._firebaseReady && window._fsAddShelf) {
         await window._fsAddShelf(book).catch(() => {});
       } else {
@@ -1575,8 +1545,7 @@ async function fetchAndOpenShelfModal(isbn) {
     document.getElementById('as-title').textContent  = book.title;
     document.getElementById('as-title').className    = 'b-title';
     document.getElementById('as-author').textContent = book.author;
-    if (book.cover) document.getElementById('as-cover').innerHTML =
-      `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`;
+    document.getElementById('as-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
     document.getElementById('as-saveBtn').disabled          = false;
     document.getElementById('as-saveAndRecordBtn').disabled = false;
   } else {
@@ -1631,9 +1600,7 @@ async function doTitleSearch() {
   }
 
   el.innerHTML = results.map((b, i) => {
-    const cv = b.cover
-      ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'; this.parentElement.style.fontSize='1.6rem'">`
-      : '📚';
+    const cv = coverImgHtml(b.cover, b.coverFallbacks);
     const srcColor = b.src === 'NDL' ? '#4ECDC4' : b.src === 'openBD' ? '#6C63FF' : '#999';
     return `<div class="title-result-item" onclick="selectTitleResult(${i})">
       <div class="tri-cover">${cv}</div>
@@ -1659,8 +1626,7 @@ function selectTitleResult(idx) {
   document.getElementById('as-title').className    = 'b-title';
   document.getElementById('as-author').textContent = book.author;
   document.getElementById('as-isbn').textContent   = book.isbn ? 'ISBN: ' + book.isbn : 'ISBN不明';
-  document.getElementById('as-cover').innerHTML    = book.cover
-    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+  document.getElementById('as-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
   document.getElementById('as-borrowed').checked   = false;
   document.getElementById('as-borrowedRow').classList.remove('checked');
   document.getElementById('as-saveBtn').disabled          = false;
@@ -1677,8 +1643,7 @@ function openBookDetail(isbn) {
   document.getElementById('bd-author').textContent = book.author;
   const borrowedTxt = book.borrowed ? '  📚 借りた本' : '';
   document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '') + borrowedTxt;
-  document.getElementById('bd-cover').innerHTML    = book.cover
-    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+  document.getElementById('bd-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
 
   const bookRecs = records.filter(r => r.isbn === isbn);
   const listEl   = document.getElementById('bd-readList');
@@ -1771,8 +1736,7 @@ function openAddRecordModal(book) {
   document.getElementById('borrowedRow').classList.remove('checked');
   document.getElementById('ar-title').textContent  = book.title;
   document.getElementById('ar-author').textContent = book.author;
-  document.getElementById('ar-cover').innerHTML = book.cover
-    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+  document.getElementById('ar-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
   document.getElementById('addRecordModal').classList.add('open');
 }
 function closeAddRecordModal() { document.getElementById('addRecordModal').classList.remove('open'); }
@@ -1904,7 +1868,7 @@ function renderRecordList() {
       : '<span class="reader-tag tag-both">👨‍👧‍👦 ふたり</span>';
     const borrowed = r.borrowed ? '<span class="reader-tag tag-borrowed">📚 借りた本</span>' : '';
     const date = r.date ? r.date.replace(/-/g,'/') : '';
-    const cv   = r.cover ? `<img src="${r.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    const cv   = coverImgHtml(r.cover, r.coverFallbacks);
     const cmt  = r.comment ? `<div class="record-comment">💬 ${esc(r.comment)}</div>` : '';
     return `<div class="record-card">
       <div class="record-cover">${cv}</div>
