@@ -991,20 +991,34 @@ function startHtml5Qr() {
   scannerRunning = true;
 }
 
+function isValidISBN(code) {
+  const c = String(code).replace(/[^0-9X]/gi, '');
+  // ISBN-13: 978 or 979 で始まる13桁
+  if (c.length === 13 && (c.startsWith('978') || c.startsWith('979'))) return true;
+  // ISBN-10: 10桁（最後がXの場合あり）
+  if (c.length === 10) return true;
+  return false;
+}
+
 function onBarcodeDetected(code) {
-  if (!code || code.length < 10) return;
+  if (!code) return;
   const now = Date.now();
-  // 同じISBNを2秒以内に連続検出しても無視
+  // 同じコードを2秒以内に連続検出しても無視
   if (code === lastScanned && now - lastScanTime < 2000) return;
+
+  // ISBN以外のバーコード（JANコードなど）を弾く
+  if (!isValidISBN(code)) {
+    // 非ISBNは静かに無視（トーストも出さない、誤爆が多いため）
+    return;
+  }
+
   lastScanned  = code;
   lastScanTime = now;
 
   if (scanMode === 'single') {
-    // 通常モード：カメラを閉じて登録確認モーダルへ
     closeCamera();
     fetchAndOpenShelfModal(code);
   } else {
-    // 連続モード：キューに追加してスキャン継続
     addToScanQueue(code);
   }
 }
@@ -1018,34 +1032,53 @@ function setScanMode(mode) {
   renderScanQueueFooter();
 }
 
-async function addToScanQueue(isbn) {
+// スキャンとAPI取得を完全分離
+// addToScanQueue：ISBNをキューに即登録（ブロックしない）
+function addToScanQueue(isbn) {
   isbn = String(isbn).replace(/[^0-9X]/g,'');
-  // 既に登録済みの本は無視
   if (shelf.find(b => b.isbn === isbn)) {
-    showToast('📚 この本はすでに本棚にあります');
-    return;
+    showToast('📚 この本はすでに本棚にあります'); return;
   }
-  // キューに重複があれば無視
   if (scanQueue.find(q => q.isbn === isbn)) {
-    showToast('✅ スキャン済みです');
-    return;
+    showToast('✅ スキャン済みです'); return;
   }
-
-  // キューに仮追加（取得中状態）
-  const entry = { isbn, title: '取得中...', author: '', cover: null, status: 'loading' };
-  scanQueue.push(entry);
+  // まずISBNだけキューに追加してUIを即更新 → スキャン継続を妨げない
+  scanQueue.push({ isbn, title: 'ISBN: ' + isbn, author: '', cover: null, status: 'loading' });
   renderScanQueue();
+  // 書誌取得ワーカーを起こす（既に動いていれば何もしない）
+  triggerFetchWorker();
+}
 
-  // バックグラウンドで書誌情報取得
-  const book = await fetchBook(isbn);
-  const idx  = scanQueue.findIndex(q => q.isbn === isbn);
-  if (idx === -1) return;
-  if (book) {
-    scanQueue[idx] = { ...book, status: 'ready' };
-  } else {
-    scanQueue[idx] = { isbn, title: 'ISBN: ' + isbn, author: '', cover: null, status: 'ready' };
+// 書誌取得ワーカー：loading状態のものを1件ずつ順番に処理
+let _workerRunning = false;
+async function triggerFetchWorker() {
+  if (_workerRunning) return;
+  _workerRunning = true;
+  while (true) {
+    const idx = scanQueue.findIndex(q => q.status === 'loading');
+    if (idx === -1) break; // 全件処理済み
+    const entry = scanQueue[idx];
+    try {
+      const book = await fetchBook(entry.isbn);
+      // まだキューに残っていれば更新
+      const cur = scanQueue.findIndex(q => q.isbn === entry.isbn);
+      if (cur !== -1) {
+        if (book) {
+          scanQueue[cur] = { ...book, status: 'ready' };
+        } else {
+          // 書誌情報が一切取れなかった → ISBN不明として除外マーク
+          scanQueue[cur] = { isbn: entry.isbn, title: '（書籍情報なし）', author: '', cover: null, status: 'notfound' };
+        }
+        renderScanQueue();
+      }
+    } catch(e) {
+      const cur = scanQueue.findIndex(q => q.isbn === entry.isbn);
+      if (cur !== -1) { scanQueue[cur].status = 'ready'; renderScanQueue(); }
+    }
+    // 連続API呼び出しの間に少し間隔を開けてサーバー負荷軽減
+    await new Promise(r => setTimeout(r, 200));
   }
-  renderScanQueue();
+  _workerRunning = false;
 }
 
 function renderScanQueue() {
@@ -1054,17 +1087,28 @@ function renderScanQueue() {
     el.innerHTML = '<div style="padding:14px;text-align:center;color:rgba(255,255,255,0.3);font-size:0.8rem">バーコードをスキャンして追加</div>';
   } else {
     el.innerHTML = scanQueue.map((q, i) => {
+      const isLoading  = q.status === 'loading';
+      const isNotFound = q.status === 'notfound';
       const cv = q.cover
-        ? `<img src="${q.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`
-        : '📚';
-      const status = q.status === 'loading'
-        ? '<span style="color:#FFD93D">⏳</span>'
-        : '<span style="color:#6BCB77">✓</span>';
-      return `<div class="scan-queue-item">
+        ? `<img src="${q.cover}" alt="" onerror="this.parentElement.innerHTML='📚'; this.parentElement.style.background='rgba(255,255,255,0.1)'; this.parentElement.style.fontSize='1.2rem'">`
+        : (isLoading ? '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:rgba(255,255,255,0.3)">…</div>' : '📚');
+      const statusIcon = isLoading
+        ? '<span style="color:#FFD93D;font-size:1.1rem">⏳</span>'
+        : isNotFound
+        ? '<span style="color:#FF6B6B;font-size:1rem">✕</span>'
+        : '<span style="color:#6BCB77;font-size:1rem">✓</span>';
+      const titleStyle = isNotFound
+        ? 'color:rgba(255,100,100,0.7);font-size:0.78rem'
+        : isLoading
+        ? 'color:rgba(255,255,255,0.4);font-size:0.8rem'
+        : 'color:white;font-size:0.82rem';
+      return `<div class="scan-queue-item" style="${isNotFound ? 'opacity:0.6' : ''}">
         <div class="sq-cover">${cv}</div>
-        <div class="sq-title">${esc(q.title)}</div>
-        <div class="sq-status">${status}</div>
-        <button onclick="removeScanQueueItem(${i})" style="background:none;border:none;color:rgba(255,255,255,0.3);font-size:1rem;cursor:pointer;padding:0 0 0 6px">×</button>
+        <div class="sq-title" style="${titleStyle}">${esc(q.title)}<br>
+          <span style="font-size:0.68rem;color:rgba(255,255,255,0.3)">${q.isbn}</span>
+        </div>
+        <div class="sq-status">${statusIcon}</div>
+        <button onclick="removeScanQueueItem(${i})" style="background:none;border:none;color:rgba(255,255,255,0.25);font-size:1.1rem;cursor:pointer;padding:0 0 0 8px;line-height:1">×</button>
       </div>`;
     }).join('');
   }
@@ -1075,10 +1119,13 @@ function renderScanQueueFooter() {
   const footer = document.getElementById('scanQueueFooter');
   const btn    = document.getElementById('registerAllBtn');
   const ready  = scanQueue.filter(q => q.status === 'ready').length;
+  const notfound = scanQueue.filter(q => q.status === 'notfound').length;
   if (scanMode === 'multi' && scanQueue.length > 0) {
     footer.classList.add('visible');
+    const suffix = notfound > 0 ? `　※${notfound}件は書籍情報なし` : '';
     btn.textContent = `📦 まとめて本棚に追加（${ready}冊）`;
-    btn.disabled    = ready === 0;
+    btn.title    = suffix;
+    btn.disabled = ready === 0;
   } else {
     footer.classList.remove('visible');
   }
@@ -1090,7 +1137,7 @@ function removeScanQueueItem(idx) {
 }
 
 async function registerQueuedBooks() {
-  const toRegister = scanQueue.filter(q => q.status === 'ready');
+  const toRegister = scanQueue.filter(q => q.status === 'ready'); // notfoundは除外
   if (toRegister.length === 0) return;
 
   const btn = document.getElementById('registerAllBtn');
