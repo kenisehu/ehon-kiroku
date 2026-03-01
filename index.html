@@ -700,7 +700,7 @@ body {
     <div class="modal-heading">📖 タイトルで検索</div>
     <div class="title-search-wrap">
       <input class="title-search-input" id="titleSearchInput"
-        placeholder="絵本のタイトルを入力..."
+        placeholder="例：ぐりとぐら、はらぺこあおむし..."
         onkeydown="if(event.key==='Enter')doTitleSearch()">
       <button class="title-search-btn" onclick="doTitleSearch()">🔍</button>
     </div>
@@ -998,23 +998,75 @@ async function fetchBook(isbn) {
 
 // ===== TITLE SEARCH =====
 async function searchBooksByTitle(query) {
-  const q = encodeURIComponent(query);
+  const q   = encodeURIComponent(query);
   const results = [];
-  const seen = new Set();
+  const seen    = new Set();
 
-  const [obdRes, gbRes] = await Promise.allSettled([
-    fetch(`https://api.openbd.jp/v1/search?title=${q}&limit=10`).then(r=>r.json()),
-    fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}+intitle&langRestrict=ja&maxResults=10`).then(r=>r.json()),
+  // 3つのAPIを並列実行
+  const [ndlRes, obdRes, gbRes] = await Promise.allSettled([
+    // ① NDL OpenSearch — 古い日本の絵本に最強。法定納本制度で国内刊行物をほぼ全収録
+    fetch(`https://iss.ndl.go.jp/api/opensearch?title=${q}&cnt=12&mediatype=1`)
+      .then(r => r.text()),
+    // ② openBD — 近年の日本語書籍に強い
+    fetch(`https://api.openbd.jp/v1/search?title=${q}&limit=10`)
+      .then(r => r.json()),
+    // ③ Google Books — 翻訳絵本・洋書の補完
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=intitle:${q}&langRestrict=ja&maxResults=8`)
+      .then(r => r.json()),
   ]);
 
-  // openBD タイトル検索
+  // ① NDL パース（最優先：古い本も含む）
+  if (ndlRes.status === 'fulfilled') {
+    try {
+      const xml   = new DOMParser().parseFromString(ndlRes.value, 'application/xml');
+      const items = xml.querySelectorAll('item');
+      for (const item of items) {
+        const titleEl = item.querySelector('title');
+        const title   = titleEl?.textContent?.trim();
+        if (!title) continue;
+
+        // ISBNを取得（link要素やdc:identifierから）
+        const identifiers = item.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','identifier');
+        let isbn = '';
+        for (const id of identifiers) {
+          const val = id.textContent?.trim() || '';
+          // ISBN-13 or ISBN-10 の形式
+          const m = val.match(/(?:ISBN[:\s]*)?(97[89]\d{10}|\d{9}[\dX])/i);
+          if (m) { isbn = m[1].replace(/-/g,''); break; }
+        }
+        // link要素からISBNを補完
+        if (!isbn) {
+          const link = item.querySelector('link');
+          const lm   = (link?.textContent || '').match(/(97[89]\d{10})/);
+          if (lm) isbn = lm[1];
+        }
+
+        const key = isbn || title; // ISBNがなければタイトルで重複排除
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const creators = item.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','creator');
+        const author   = creators[0]?.textContent?.trim() || '';
+
+        // NDLサーチ 書影API（ISBNがあれば表紙を取得できる）
+        const cover = isbn ? `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg` : null;
+
+        results.push({ isbn, title, author, cover, src: 'NDL' });
+        if (results.length >= 10) break;
+      }
+    } catch(e) { console.warn('[NDL search] parse error', e); }
+  }
+
+  // ② openBD（タイトル被りを除外しながら追加）
   if (obdRes.status === 'fulfilled' && Array.isArray(obdRes.value)) {
-    for (const item of obdRes.value) {
+    for (const item of (obdRes.value || [])) {
       if (!item) continue;
-      const s = item.summary || {};
-      const isbn = s.isbn || '';
-      if (!isbn || seen.has(isbn)) continue;
-      seen.add(isbn);
+      const s    = item.summary || {};
+      const isbn = (s.isbn || '').replace(/-/g,'');
+      if (!isbn) continue;
+      const key  = isbn;
+      if (seen.has(key)) continue;
+      seen.add(key);
       results.push({
         isbn,
         title:  s.title  || '(タイトル不明)',
@@ -1022,20 +1074,21 @@ async function searchBooksByTitle(query) {
         cover:  (s.cover && s.cover.length > 10) ? s.cover : null,
         src: 'openBD'
       });
+      if (results.length >= 15) break;
     }
   }
 
-  // Google Books タイトル検索
+  // ③ Google Books（翻訳絵本・洋書補完）
   if (gbRes.status === 'fulfilled' && gbRes.value?.items) {
     for (const item of gbRes.value.items) {
-      const info = item.volumeInfo || {};
-      // ISBNを取得
+      const info    = item.volumeInfo || {};
       const isbnObj = (info.industryIdentifiers||[]).find(x => x.type==='ISBN_13' || x.type==='ISBN_10');
-      const isbn = isbnObj?.identifier || '';
-      if (seen.has(isbn)) continue;
-      if (isbn) seen.add(isbn);
-      const il = info.imageLinks || {};
-      const raw = il.medium || il.small || il.thumbnail || null;
+      const isbn    = (isbnObj?.identifier || '').replace(/-/g,'');
+      const key     = isbn || info.title;
+      if (seen.has(key)) continue;
+      if (key) seen.add(key);
+      const il    = info.imageLinks || {};
+      const raw   = il.medium || il.small || il.thumbnail || null;
       const cover = raw ? raw.replace('http:','https:').replace('&edge=curl','').replace('zoom=1','zoom=3') : null;
       results.push({
         isbn,
@@ -1044,9 +1097,29 @@ async function searchBooksByTitle(query) {
         cover,
         src: 'Google Books'
       });
-      if (results.length >= 12) break;
+      if (results.length >= 18) break;
     }
   }
+
+  // NDLの書影URLを非同期で存在確認してから返す
+  // （存在しない場合は null に差し替え）
+  await Promise.allSettled(
+    results.map(async (r, i) => {
+      if (r.cover && r.src === 'NDL') {
+        const ok = await imgExists(r.cover);
+        if (!ok) {
+          // NDLにない → ISBNがあればopenBD cover.openbd.jpを試す
+          if (r.isbn) {
+            const alt = `https://cover.openbd.jp/${r.isbn}.jpg`;
+            const ok2 = await imgExists(alt);
+            results[i].cover = ok2 ? alt : null;
+          } else {
+            results[i].cover = null;
+          }
+        }
+      }
+    })
+  );
 
   return results;
 }
@@ -1146,14 +1219,15 @@ async function doTitleSearch() {
 
   el.innerHTML = results.map((b, i) => {
     const cv = b.cover
-      ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`
+      ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'; this.parentElement.style.fontSize='1.6rem'">`
       : '📚';
+    const srcColor = b.src === 'NDL' ? '#4ECDC4' : b.src === 'openBD' ? '#6C63FF' : '#999';
     return `<div class="title-result-item" onclick="selectTitleResult(${i})">
       <div class="tri-cover">${cv}</div>
-      <div>
+      <div style="flex:1;min-width:0">
         <div class="tri-title">${esc(b.title)}</div>
-        <div class="tri-author">${esc(b.author)}</div>
-        <div class="tri-src">${b.isbn || 'ISBN不明'} · ${b.src}</div>
+        <div class="tri-author">${esc(b.author) || '著者不明'}</div>
+        <div class="tri-src"><span style="color:${srcColor};font-weight:bold">${b.src}</span>${b.isbn ? ' · ' + b.isbn : ' · ISBN不明'}</div>
       </div>
     </div>`;
   }).join('');
