@@ -476,6 +476,41 @@ body {
 .borrowed-check-row input[type=checkbox] { width: 20px; height: 20px; cursor: pointer; accent-color: #E65100; }
 .borrowed-check-label { font-size: 0.9rem; color: #555; cursor: pointer; }
 
+/* TITLE SEARCH MODAL */
+.title-search-wrap { position: relative; margin-bottom: 12px; }
+.title-search-input {
+  width: 100%; padding: 13px 46px 13px 16px;
+  border: 2px solid var(--warm); border-radius: 13px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.93rem;
+  background: white; outline: none; transition: border-color 0.2s;
+}
+.title-search-input:focus { border-color: var(--teal); }
+.title-search-btn {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: var(--navy); color: white; border: none; border-radius: 10px;
+  padding: 7px 12px; cursor: pointer; font-size: 0.9rem;
+}
+.title-result-item {
+  display: flex; gap: 12px; align-items: center;
+  padding: 11px 13px; background: white; border-radius: 13px;
+  margin-bottom: 8px; cursor: pointer;
+  border: 2px solid transparent; transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.title-result-item:hover, .title-result-item.selected {
+  border-color: var(--teal); background: #F0FAFA;
+}
+.tri-cover {
+  width: 42px; height: 54px; border-radius: 6px; background: var(--warm);
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem; overflow: hidden;
+}
+.tri-cover img { width: 100%; height: 100%; object-fit: cover; }
+.tri-title  { font-size: 0.87rem; font-weight: bold; color: var(--navy); line-height: 1.3; }
+.tri-author { font-size: 0.73rem; color: #aaa; margin-top: 2px; }
+.tri-src    { font-size: 0.65rem; color: #ccc; margin-top: 2px; }
+.search-loading { text-align:center; color:#bbb; font-size:0.85rem; padding:16px 0; }
+
 /* TOAST */
 .toast {
   position: fixed; bottom: 90px; left: 50%;
@@ -526,13 +561,18 @@ body {
   <div class="action-row">
     <button class="action-card scan" onclick="openScanModal()">
       <span class="action-icon">📷</span>
-      <div class="action-text">バーコードスキャン</div>
+      <div class="action-text">バーコード</div>
       <div class="action-sub">カメラで読み取る</div>
     </button>
     <button class="action-card isbn" onclick="openIsbnModal()">
       <span class="action-icon">🔢</span>
-      <div class="action-text">ISBN手入力</div>
+      <div class="action-text">ISBN入力</div>
       <div class="action-sub">番号を直接入力</div>
+    </button>
+    <button class="action-card" style="background:linear-gradient(135deg,#FF8C42,#E65100);box-shadow:0 6px 20px rgba(230,81,0,0.35)" onclick="openTitleSearchModal()">
+      <span class="action-icon">🔍</span>
+      <div class="action-text">タイトル検索</div>
+      <div class="action-sub">名前で探して登録</div>
     </button>
   </div>
 
@@ -653,6 +693,22 @@ body {
   </div>
 </div>
 
+<!-- タイトル検索モーダル -->
+<div class="modal-overlay" id="titleSearchModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">📖 タイトルで検索</div>
+    <div class="title-search-wrap">
+      <input class="title-search-input" id="titleSearchInput"
+        placeholder="絵本のタイトルを入力..."
+        onkeydown="if(event.key==='Enter')doTitleSearch()">
+      <button class="title-search-btn" onclick="doTitleSearch()">🔍</button>
+    </div>
+    <div id="titleSearchResults"></div>
+    <button class="btn-cancel" onclick="closeTitleSearchModal()">キャンセル</button>
+  </div>
+</div>
+
 <!-- 本棚登録確認モーダル -->
 <div class="modal-overlay" id="addShelfModal">
   <div class="modal">
@@ -670,7 +726,8 @@ body {
       <input type="checkbox" id="as-borrowed" onclick="event.stopPropagation()">
       <span class="borrowed-check-label">📚 図書館・借りた本</span>
     </div>
-    <button class="btn-primary" id="as-saveBtn" onclick="saveToShelf()" disabled>📦 本棚に登録する</button>
+    <button class="btn-primary" id="as-saveBtn" onclick="saveToShelf(false)" disabled>📦 本棚に登録する</button>
+    <button class="btn-primary" id="as-saveAndRecordBtn" onclick="saveToShelf(true)" disabled style="margin-top:10px;background:linear-gradient(135deg,var(--teal),var(--teal-dark));box-shadow:0 4px 16px rgba(78,205,196,0.4)">📖 登録してすぐ読書記録もつける</button>
     <button class="btn-cancel" onclick="closeAddShelfModal()">キャンセル</button>
   </div>
 </div>
@@ -861,29 +918,43 @@ async function fetchBook(isbn) {
   let title=null, author=null, cover=null;
   const log=[];
 
-  // 1) openBD（日本書籍に最強・登録不要・高速）
-  try {
-    const res  = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
-    const data = await res.json();
-    const item = data[0];
+  // --- 書誌情報とカバーを並列取得 ---
+  const [obdRes, gbRes, ndlRes] = await Promise.allSettled([
+    fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`).then(r=>r.json()),
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`).then(r=>r.json()),
+    fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=1&mediatype=1`).then(r=>r.text()),
+  ]);
+
+  // 1) openBD（日本書籍に最強）
+  if (obdRes.status === 'fulfilled') {
+    const item = obdRes.value?.[0];
     log.push(`[openBD] found=${!!item}`);
     if (item) {
       const s = item.summary || {};
       title  = s.title  || null;
       author = s.author || null;
-      cover  = s.cover  || null;
-      // coverが空文字の場合はnullに
-      if (!cover) cover = null;
+      cover  = (s.cover && s.cover.length > 10) ? s.cover : null;
     }
-  } catch(e) { log.push(`[openBD] err: ${e.message}`); }
+  }
 
-  // 2) NDL OpenSearch（openBDにない本の補完）
-  if (!title) {
+  // 2) Google Books（書誌・表紙補完）
+  if (gbRes.status === 'fulfilled' && gbRes.value?.items?.length > 0) {
+    const info = gbRes.value.items[0].volumeInfo;
+    log.push(`[GB] found`);
+    if (!title)  title  = info.title || null;
+    if (!author) author = (info.authors||[]).join(', ') || null;
+    if (!cover) {
+      const il  = info.imageLinks || {};
+      const raw = il.medium || il.small || il.thumbnail || il.smallThumbnail || null;
+      if (raw) cover = raw.replace('http:','https:').replace('zoom=1','zoom=3').replace('&edge=curl','');
+    }
+  }
+
+  // 3) NDL（書誌補完）
+  if (!title && ndlRes.status === 'fulfilled') {
     try {
-      const res  = await fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=3&mediatype=1`);
-      const text = await res.text();
-      const xml  = new DOMParser().parseFromString(text, 'application/xml');
-      const items= xml.querySelectorAll('item');
+      const xml   = new DOMParser().parseFromString(ndlRes.value, 'application/xml');
+      const items = xml.querySelectorAll('item');
       log.push(`[NDL] items=${items.length}`);
       if (items.length > 0) {
         const t = items[0].querySelector('title');
@@ -893,53 +964,91 @@ async function fetchBook(isbn) {
           author = author || c[0]?.textContent?.trim() || null;
         }
       }
-    } catch(e) { log.push(`[NDL] err`); }
+    } catch(e) { log.push('[NDL] parse err'); }
   }
 
-  // 3) Google Books（洋書・NDLにもない場合の最終手段）
-  if (!title) {
-    try {
-      const res  = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
-      const data = await res.json();
-      log.push(`[GB] items=${data.totalItems}`);
-      if (data.items?.length > 0) {
-        const info = data.items[0].volumeInfo;
-        title  = info.title || null;
-        author = author || (info.authors||[]).join(', ') || null;
-        if (!cover) {
-          const il = info.imageLinks||{};
-          const raw= il.medium||il.small||il.thumbnail||il.smallThumbnail||null;
-          if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','');
-        }
+  // 4) 表紙がまだない → 複数ソースを並列チェック
+  if (!cover && title) {
+    const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
+    const coverCandidates = await Promise.allSettled([
+      // openBD サムネイル URL パターン
+      imgExists(`https://cover.openbd.jp/${isbn13}.jpg`),
+      // Open Library
+      imgExists(`https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`),
+      // Google Books thumbnail（直接URL）
+      imgExists(`https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=3&source=gbs_api`),
+    ]);
+    const coverUrls = [
+      `https://cover.openbd.jp/${isbn13}.jpg`,
+      `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
+      `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=3&source=gbs_api`,
+    ];
+    for (let i = 0; i < coverCandidates.length; i++) {
+      if (coverCandidates[i].status === 'fulfilled' && coverCandidates[i].value) {
+        cover = coverUrls[i];
+        log.push(`[cover fallback] ${i}`);
+        break;
       }
-    } catch(e) { log.push(`[GB] err`); }
+    }
   }
 
-  // 4) Open Library（さらに補完）
-  if (!title) {
-    try {
-      const res  = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
-      const data = await res.json();
-      const book = data[`ISBN:${isbn}`];
-      log.push(`[OL] found=${!!book}`);
-      if (book) {
-        title  = book.title || null;
-        author = author || (book.authors||[]).map(a=>a.name).join(', ') || null;
-        if (!cover && book.cover) cover = book.cover.medium||book.cover.small||null;
-      }
-    } catch(e) { log.push(`[OL] err`); }
-  }
-
-  // 5) Open Library カバー画像補完（表紙がまだなければ）
-  if (!cover) {
-    const url = `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`;
-    const ok  = await imgExists(url);
-    log.push(`[OL cover] ${ok}`);
-    if (ok) cover = url;
-  }
-
-  console.log('[えほんきろく]', isbn, log.join(' | '), '→', title);
+  console.log('[えほんきろく]', isbn, log.join(' | '), '→', title, cover ? '📷' : '');
   return title ? { isbn, title, author:author||'', cover:cover||null } : null;
+}
+
+// ===== TITLE SEARCH =====
+async function searchBooksByTitle(query) {
+  const q = encodeURIComponent(query);
+  const results = [];
+  const seen = new Set();
+
+  const [obdRes, gbRes] = await Promise.allSettled([
+    fetch(`https://api.openbd.jp/v1/search?title=${q}&limit=10`).then(r=>r.json()),
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}+intitle&langRestrict=ja&maxResults=10`).then(r=>r.json()),
+  ]);
+
+  // openBD タイトル検索
+  if (obdRes.status === 'fulfilled' && Array.isArray(obdRes.value)) {
+    for (const item of obdRes.value) {
+      if (!item) continue;
+      const s = item.summary || {};
+      const isbn = s.isbn || '';
+      if (!isbn || seen.has(isbn)) continue;
+      seen.add(isbn);
+      results.push({
+        isbn,
+        title:  s.title  || '(タイトル不明)',
+        author: s.author || '',
+        cover:  (s.cover && s.cover.length > 10) ? s.cover : null,
+        src: 'openBD'
+      });
+    }
+  }
+
+  // Google Books タイトル検索
+  if (gbRes.status === 'fulfilled' && gbRes.value?.items) {
+    for (const item of gbRes.value.items) {
+      const info = item.volumeInfo || {};
+      // ISBNを取得
+      const isbnObj = (info.industryIdentifiers||[]).find(x => x.type==='ISBN_13' || x.type==='ISBN_10');
+      const isbn = isbnObj?.identifier || '';
+      if (seen.has(isbn)) continue;
+      if (isbn) seen.add(isbn);
+      const il = info.imageLinks || {};
+      const raw = il.medium || il.small || il.thumbnail || null;
+      const cover = raw ? raw.replace('http:','https:').replace('&edge=curl','').replace('zoom=1','zoom=3') : null;
+      results.push({
+        isbn,
+        title:  info.title || '(タイトル不明)',
+        author: (info.authors||[]).join(', '),
+        cover,
+        src: 'Google Books'
+      });
+      if (results.length >= 12) break;
+    }
+  }
+
+  return results;
 }
 
 function imgExists(url) {
@@ -982,29 +1091,94 @@ async function fetchAndOpenShelfModal(isbn) {
     document.getElementById('as-author').textContent = book.author;
     if (book.cover) document.getElementById('as-cover').innerHTML =
       `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`;
-    document.getElementById('as-saveBtn').disabled = false;
+    document.getElementById('as-saveBtn').disabled          = false;
+    document.getElementById('as-saveAndRecordBtn').disabled = false;
   } else {
     document.getElementById('as-title').textContent = '書籍情報が見つかりませんでした';
     showToast('⚠️ 情報を取得できませんでした（コンソール参照）');
   }
 }
 function closeAddShelfModal() { document.getElementById('addShelfModal').classList.remove('open'); }
-function saveToShelf() {
+function saveToShelf(andRecord = false) {
   if (!currentBookData) return;
-  currentBookData.addedAt   = new Date().toISOString().slice(0,10);
-  currentBookData.borrowed  = document.getElementById('as-borrowed').checked;
+  currentBookData.addedAt  = new Date().toISOString().slice(0,10);
+  currentBookData.borrowed = document.getElementById('as-borrowed').checked;
+  const bookToRecord = { ...currentBookData };
   if (window._firebaseReady && window._fsAddShelf) {
     window._fsAddShelf(currentBookData)
-      .then(() => showToast('📦 本棚に登録しました！'))
+      .then(() => {
+        showToast(andRecord ? '📦 登録完了！読書記録をつけましょう' : '📦 本棚に登録しました！');
+        if (andRecord) openAddRecordModal(bookToRecord);
+      })
       .catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); });
   } else {
-    // オフライン時はローカルに保存
     shelf.unshift(currentBookData);
     localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
-    showToast('📦 本棚に登録しました（オフライン）');
     renderAll();
+    showToast(andRecord ? '📦 登録完了！読書記録をつけましょう' : '📦 本棚に登録しました（オフライン）');
+    if (andRecord) openAddRecordModal(bookToRecord);
   }
   closeAddShelfModal();
+}
+
+// ===== TITLE SEARCH MODAL =====
+function openTitleSearchModal() {
+  document.getElementById('titleSearchInput').value = '';
+  document.getElementById('titleSearchResults').innerHTML = '';
+  document.getElementById('titleSearchModal').classList.add('open');
+  setTimeout(() => document.getElementById('titleSearchInput').focus(), 300);
+}
+function closeTitleSearchModal() {
+  document.getElementById('titleSearchModal').classList.remove('open');
+}
+
+async function doTitleSearch() {
+  const q = document.getElementById('titleSearchInput').value.trim();
+  if (!q) return;
+  const el = document.getElementById('titleSearchResults');
+  el.innerHTML = '<div class="search-loading">🔍 検索中...</div>';
+
+  const results = await searchBooksByTitle(q);
+  if (results.length === 0) {
+    el.innerHTML = '<div class="search-loading">見つかりませんでした</div>';
+    return;
+  }
+
+  el.innerHTML = results.map((b, i) => {
+    const cv = b.cover
+      ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">`
+      : '📚';
+    return `<div class="title-result-item" onclick="selectTitleResult(${i})">
+      <div class="tri-cover">${cv}</div>
+      <div>
+        <div class="tri-title">${esc(b.title)}</div>
+        <div class="tri-author">${esc(b.author)}</div>
+        <div class="tri-src">${b.isbn || 'ISBN不明'} · ${b.src}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // 検索結果を一時保存
+  window._titleSearchResults = results;
+}
+
+function selectTitleResult(idx) {
+  const book = window._titleSearchResults?.[idx];
+  if (!book) return;
+  closeTitleSearchModal();
+  // ISBN があれば通常フローへ、なければ直接登録確認モーダルへ
+  currentBookData = book;
+  document.getElementById('as-title').textContent  = book.title;
+  document.getElementById('as-title').className    = 'b-title';
+  document.getElementById('as-author').textContent = book.author;
+  document.getElementById('as-isbn').textContent   = book.isbn ? 'ISBN: ' + book.isbn : 'ISBN不明';
+  document.getElementById('as-cover').innerHTML    = book.cover
+    ? `<img src="${book.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+  document.getElementById('as-borrowed').checked   = false;
+  document.getElementById('as-borrowedRow').classList.remove('checked');
+  document.getElementById('as-saveBtn').disabled          = false;
+  document.getElementById('as-saveAndRecordBtn').disabled = false;
+  document.getElementById('addShelfModal').classList.add('open');
 }
 
 // ===== BOOK DETAIL =====
