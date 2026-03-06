@@ -778,8 +778,9 @@ body {
     <div class="modal-handle"></div>
     <div class="modal-heading">ISBNを入力</div>
     <div class="isbn-row">
-      <input class="isbn-input" id="isbnInputField" type="number"
-        placeholder="例: 9784834000825"
+      <input class="isbn-input" id="isbnInputField" type="text"
+        placeholder="例: 9784834000825 または 978-4-8340-0082-5"
+        inputmode="numeric"
         onkeydown="if(event.key==='Enter')lookupFromIsbnModal()">
       <button class="isbn-btn" onclick="lookupFromIsbnModal()">🔍</button>
     </div>
@@ -1196,48 +1197,25 @@ function lookupFromIsbnModal() {
 }
 
 // ===== FETCH BOOK =====
-// 書誌情報を取得する。表紙はURLを渡すだけ（imgIsReal確認はしない）
-// → img onerrorで次の候補にフォールバックする方式
 async function fetchBook(isbn) {
   isbn = String(isbn).replace(/[^0-9X]/g,'');
   if (!isbn || isbn.length < 10) return null;
   const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
-  let title=null, author=null, cover=null;
+  let title=null, author=null, gbVolumeId=null;
   const log=[];
 
-  // 3APIを並列取得（待ち時間を最小化）
-  const [obdRes, gbRes, ndlRes] = await Promise.allSettled([
-    fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`).then(r=>r.json()),
-    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`).then(r=>r.json()),
+  // 3API並列取得
+  const [ndlRes, obdRes, gbRes] = await Promise.allSettled([
+    // ① NDL — 書誌最優先（国内刊行物ほぼ全収録、福音館など古い絵本も◎）
     fetch(`https://iss.ndl.go.jp/api/opensearch?isbn=${isbn13}&cnt=1&mediatype=1`).then(r=>r.text()),
+    // ② openBD — 近年の日本書籍
+    fetch(`https://api.openbd.jp/v1/get?isbn=${isbn13}`).then(r=>r.json()),
+    // ③ Google Books — 補完用
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`).then(r=>r.json()),
   ]);
 
-  // 1) openBD — 日本の絵本に最強、表紙URLも信頼性高い
-  if (obdRes.status === 'fulfilled' && obdRes.value?.[0]) {
-    const s = obdRes.value[0].summary || {};
-    title  = s.title  || null;
-    author = s.author || null;
-    // cover.openbd.jp は openBD summary.cover より安定している
-    cover  = `https://cover.openbd.jp/${isbn13}.jpg`;
-    log.push(`[openBD] ${title ? 'hit' : 'no title'}`);
-  }
-
-  // 2) Google Books — 書誌補完・表紙補完
-  if (gbRes.status === 'fulfilled' && gbRes.value?.items?.length > 0) {
-    const info = gbRes.value.items[0].volumeInfo;
-    log.push('[GB] hit');
-    if (!title)  title  = info.title || null;
-    if (!author) author = (info.authors||[]).join(', ') || null;
-    // GBの表紙URLをフォールバック候補として保持
-    if (!cover && info.imageLinks) {
-      const il  = info.imageLinks;
-      const raw = il.medium || il.small || il.thumbnail || il.smallThumbnail || null;
-      if (raw) cover = raw.replace('http:','https:').replace('&edge=curl','').replace('zoom=1','zoom=2');
-    }
-  }
-
-  // 3) NDL — 書誌補完
-  if (!title && ndlRes.status === 'fulfilled') {
+  // 1) NDL（書誌最優先）
+  if (ndlRes.status === 'fulfilled') {
     try {
       const xml  = new DOMParser().parseFromString(ndlRes.value, 'application/xml');
       const item = xml.querySelector('item');
@@ -1245,28 +1223,47 @@ async function fetchBook(isbn) {
         const t = item.querySelector('title');
         const c = item.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/','creator');
         title  = t?.textContent?.trim() || null;
-        author = author || c[0]?.textContent?.trim() || null;
-        log.push(`[NDL] ${title ? 'hit' : 'no title'}`);
-        // NDL書影
-        if (!cover) cover = `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`;
+        author = c[0]?.textContent?.trim() || null;
+        log.push(`[NDL] ${title ? 'hit' : 'miss'}`);
       }
     } catch(e) { log.push('[NDL] err'); }
   }
 
-  // 表紙候補リスト（img onerror で順番にフォールバックするためdata属性に埋め込む）
-  const coverFallbacks = [
-    `https://cover.openbd.jp/${isbn13}.jpg`,
-    `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
-    `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
-    `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
-  ];
-  // GBのAPI経由URLを先頭候補として追加（取れていれば）
-  if (cover && cover.includes('googleapis') === false && cover.includes('google.com') === false) {
-    // openBD/NDLのURLが既にある → それが先頭
+  // 2) openBD（書誌補完）
+  if (obdRes.status === 'fulfilled' && obdRes.value?.[0]) {
+    const s = obdRes.value[0].summary || {};
+    if (!title)  title  = s.title  || null;
+    if (!author) author = s.author || null;
+    log.push(`[openBD] ${s.title ? 'hit' : 'miss'}`);
   }
 
-  console.log('[えほんきろく]', isbn13, log.join(' | '), '→', title);
-  return title ? { isbn: isbn13, title, author:author||'', cover, coverFallbacks } : null;
+  // 3) Google Books（書誌補完 + volumeIdで書影URL確保）
+  if (gbRes.status === 'fulfilled' && gbRes.value?.items?.length > 0) {
+    const item = gbRes.value.items[0];
+    const info = item.volumeInfo;
+    if (!title)  title  = info.title || null;
+    if (!author) author = (info.authors||[]).join(', ') || null;
+    // IDベースURLはISBNベースより確実に書影を返す
+    if (item.id) gbVolumeId = item.id;
+    log.push(`[GB] ${info.title ? 'hit' : 'miss'}`);
+  }
+
+  if (!title) { console.log('[えほんきろく] NOT FOUND', isbn13); return null; }
+
+  // 表紙候補リスト — onerrorで順番に試す
+  // NDL書影(404で安全) → openBD cover → GB(IDベース) → GB(ISBNベース) → OL
+  const coverFallbacks = [
+    `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
+    `https://cover.openbd.jp/${isbn13}.jpg`,
+    gbVolumeId
+      ? `https://books.google.com/books/content?id=${gbVolumeId}&printsec=frontcover&img=1&zoom=2&source=gbs_api`
+      : null,
+    `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
+    `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
+  ].filter(Boolean);
+
+  console.log('[えほんきろく]', isbn13, log.join(' | '), '→', title, `(${coverFallbacks.length}候補)`);
+  return { isbn: isbn13, title, author: author||'', cover: coverFallbacks[0], coverFallbacks };
 }
 
 // ===== TITLE SEARCH =====
@@ -1404,21 +1401,37 @@ function coverImgHtml(cover, fallbacks, cls='') {
   const fb = JSON.stringify(fallbacks || []).replace(/"/g, '&quot;');
   if (!cover && (!fallbacks || fallbacks.length === 0)) return '📚';
   const src = cover || (fallbacks && fallbacks[0]) || '';
+  // data-check-size="1" で最初のonloadでも偽画像チェックを行う
   return `<img src="${src}" class="${cls}" alt=""
-    data-fallbacks="${fb}" data-fb-idx="0"
+    data-fallbacks="${fb}" data-fb-idx="0" data-check-size="1"
     onerror="nextCoverFallback(this)"
-    onload="this.style.opacity=1"
-    style="opacity:0;transition:opacity 0.3s">`;
+    onload="nextCoverFallback(this)"
+    style="opacity:0;transition:opacity 0.3s;width:100%;height:100%;object-fit:cover">`;
 }
 
 function nextCoverFallback(img) {
+  // onload後に偽画像チェック（サイズで判定）
+  if (img.dataset.checkSize === '1') {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const isFake =
+      (w < 50 || h < 50) ||
+      (w === 1 && h === 1) ||
+      (w === 120 && h === 187) ||   // OL緑デフォルト
+      (w === 128 && h === 197) ||   // OL緑デフォルト
+      (w === 128 && h === 168);     // GB "not available"
+    if (!isFake) { img.style.opacity = 1; return; } // 本物 → そのまま表示
+    // 偽画像 → 次の候補へ
+  }
+  img.dataset.checkSize = '';
+
   const fallbacks = JSON.parse(img.dataset.fallbacks || '[]');
   let idx = parseInt(img.dataset.fbIdx || '0') + 1;
-  // 既に試したURLと現在のsrcを除外
   while (idx < fallbacks.length) {
     const next = fallbacks[idx];
     if (next && next !== img.src) {
-      img.dataset.fbIdx = idx;
+      img.dataset.fbIdx  = idx;
+      img.dataset.checkSize = '1'; // 次のonloadでサイズチェック
+      img.style.opacity  = 0;
       img.src = next;
       return;
     }
@@ -1476,16 +1489,11 @@ async function backfillMissingCovers(forceAll = false) {
     const candidates = [
       `https://cover.openbd.jp/${isbn13}.jpg`,
       `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
-      `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
       `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
+      `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
     ];
-    // coverFallbacksとして保存（imgIsReal確認なし・表示時にonerrorで試す）
     book.coverFallbacks = candidates;
-
-    if (!book.cover || forceAll) {
-      // 先頭候補をcoverとして設定
-      book.cover = candidates[0];
-    }
+    book.cover = candidates[0]; // onerrorで次候補へ自動切り替え
     const foundCover = book.cover;
     if (foundCover) {
       if (window._firebaseReady && window._fsAddShelf) {
@@ -1967,7 +1975,7 @@ function exportAllCSV() {
   });
   downloadCSV('えほんきろく_全データ_' + todayStr() + '.csv', rows);
 }
-  
+
 // ===== UTILS =====
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
