@@ -1770,51 +1770,61 @@ async function searchBooksByTitle(query) {
 }
 
 // ===== COVER IMAGE HELPER =====
-// 表紙画像HTML生成：onerrorで候補URLを順番に試すフォールバック方式
-// data-fallbacks に JSON配列で候補URLを渡す
 function coverImgHtml(cover, fallbacks, cls='') {
-  const fb = JSON.stringify(fallbacks || []).replace(/"/g, '&quot;');
-  if (!cover && (!fallbacks || fallbacks.length === 0)) return '📚';
-  const src = cover || (fallbacks && fallbacks[0]) || '';
-  // data-check-size="1" で最初のonloadでも偽画像チェックを行う
-  return `<img src="${src}" class="${cls}" alt=""
-    data-fallbacks="${fb}" data-fb-idx="0" data-check-size="1"
-    onerror="nextCoverFallback(this)"
-    onload="nextCoverFallback(this)"
+  // coverFallbacksがない古いデータはISBNからその場で生成
+  const isbn = cover && cover.match(/(97[89]\d{10})/) ? cover.match(/(97[89]\d{10})/)[1] : null;
+  let fb = fallbacks && fallbacks.length > 0 ? [...fallbacks] : [];
+  if (fb.length === 0 && isbn) {
+    fb = [
+      `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`,
+      `https://cover.openbd.jp/${isbn}.jpg`,
+      `https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
+      `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`,
+    ];
+  }
+  const allUrls = [...new Set([cover, ...fb].filter(Boolean))];
+  if (allUrls.length === 0) return '📚';
+  const fbJson = JSON.stringify(allUrls).replace(/"/g, '&quot;');
+  return `<img src="${allUrls[0]}" class="${cls}" alt=""
+    data-fallbacks="${fbJson}" data-fb-idx="0"
+    onerror="coverFbNext(this)"
+    onload="coverFbCheck(this)"
     style="opacity:0;transition:opacity 0.3s;width:100%;height:100%;object-fit:cover">`;
 }
 
-function nextCoverFallback(img) {
-  // onload後に偽画像チェック（サイズで判定）
-  if (img.dataset.checkSize === '1') {
-    const w = img.naturalWidth, h = img.naturalHeight;
-    const isFake =
-      (w < 50 || h < 50) ||
-      (w === 1 && h === 1) ||
-      (w === 120 && h === 187) ||   // OL緑デフォルト
-      (w === 128 && h === 197) ||   // OL緑デフォルト
-      (w === 128 && h === 168);     // GB "not available"
-    if (!isFake) { img.style.opacity = 1; return; } // 本物 → そのまま表示
-    // 偽画像 → 次の候補へ
+// onload: サイズで偽画像チェック。本物なら表示、偽なら次へ
+function coverFbCheck(img) {
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const fake =
+    w < 50 || h < 50 ||
+    (w === 120 && h === 187) ||  // OpenLibrary デフォルト緑
+    (w === 128 && h === 197) ||  // OpenLibrary デフォルト緑
+    (w === 128 && h === 168);    // Google Books "not available"
+  if (!fake) {
+    img.style.opacity = 1;
+    return;
   }
-  img.dataset.checkSize = '';
+  coverFbNext(img); // 偽画像 → 次の候補へ
+}
 
-  const fallbacks = JSON.parse(img.dataset.fallbacks || '[]');
-  let idx = parseInt(img.dataset.fbIdx || '0') + 1;
-  while (idx < fallbacks.length) {
-    const next = fallbacks[idx];
-    if (next && next !== img.src) {
-      img.dataset.fbIdx  = idx;
-      img.dataset.checkSize = '1'; // 次のonloadでサイズチェック
-      img.style.opacity  = 0;
-      img.src = next;
+// onerror / 偽画像: 次の候補URLを試す
+function coverFbNext(img) {
+  const all = JSON.parse(img.dataset.fallbacks || '[]');
+  let idx   = parseInt(img.dataset.fbIdx || '0') + 1;
+  while (idx < all.length) {
+    if (all[idx] && all[idx] !== img.src) {
+      img.dataset.fbIdx = idx;
+      img.src = all[idx];
       return;
     }
     idx++;
   }
-  // 全候補失敗 → 絵文字に差し替え
-  img.outerHTML = '<span style="font-size:2rem">📚</span>';
+  // 全候補失敗
+  img.outerHTML = '<span style="font-size:1.8rem;line-height:1">📚</span>';
 }
+
+// 後方互換
+function nextCoverFallback(img) { coverFbNext(img); }
 
 // 本棚の書影更新時に、同ISBNの読書記録も表紙を同期する
 async function syncRecordCovers(isbn, cover, coverFallbacks) {
@@ -1857,7 +1867,8 @@ function imgExists(url) { return imgIsReal(url); }
 // forceAll=true: 既存の表紙URLも再チェックして偽画像を差し替え
 async function backfillMissingCovers(forceAll = false) {
   // 対象：ISBNあり、かつ（表紙なし or forceAll）
-  const targets = shelf.filter(b => b.isbn && (forceAll || !b.cover));
+  // coverFallbacksがない古いデータも対象（cover URLだけ持っていてfallbacksがない）
+  const targets = shelf.filter(b => b.isbn && (forceAll || !b.cover || !b.coverFallbacks || b.coverFallbacks.length === 0));
   if (targets.length === 0) {
     if (forceAll) showToast('対象の本がありません');
     return;
@@ -1871,41 +1882,22 @@ async function backfillMissingCovers(forceAll = false) {
     if (!isbn || isbn.length < 10) continue;
     const isbn13 = isbn.length === 13 ? isbn : '978' + isbn;
 
-    // 既存の表紙URLが本物かチェック（forceAll時のみ）
-    if (forceAll && book.cover) {
-      const stillGood = await imgIsReal(book.cover);
-      if (stillGood) continue; // 本物ならスキップ
-      console.log(`[えほんきろく] 偽画像検出: ${book.title}`);
-    }
-
-    // 複数ソースを順番に試す（imgIsReal でプレースホルダーを除外）
+    // NDL優先の候補リストをセット（表示時にcoverFbCheckが偽画像を自動スキップ）
     const candidates = [
-      `https://cover.openbd.jp/${isbn13}.jpg`,
       `https://ndlsearch.ndl.go.jp/thumbnail/${isbn13}.jpg`,
+      `https://cover.openbd.jp/${isbn13}.jpg`,
       `https://books.google.com/books/content?vid=ISBN${isbn13}&printsec=frontcover&img=1&zoom=2&source=gbs_api`,
       `https://covers.openlibrary.org/b/isbn/${isbn13}-M.jpg`,
     ];
     book.coverFallbacks = candidates;
-    book.cover = candidates[0]; // onerrorで次候補へ自動切り替え
-    const foundCover = book.cover;
-    if (foundCover) {
-      if (window._firebaseReady && window._fsAddShelf) {
-        await window._fsAddShelf(book).catch(() => {});
-      } else {
-        localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
-      }
-      updated++;
-      syncRecordCovers(book.isbn, book.cover, book.coverFallbacks);
-      renderShelf();
-      console.log(`[えほんきろく] 表紙更新: ${book.title}`);
-    } else if (!foundCover && book.cover) {
-      // 本物の表紙が見つからなかった → 偽画像をクリア
-      book.cover = null;
-      if (window._firebaseReady && window._fsAddShelf) {
-        await window._fsAddShelf(book).catch(() => {});
-      }
-      renderShelf();
+    book.cover = candidates[0];
+    if (window._firebaseReady && window._fsAddShelf) {
+      await window._fsAddShelf(book).catch(() => {});
+    } else {
+      localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
     }
+    updated++;
+    syncRecordCovers(book.isbn, book.cover, book.coverFallbacks);
 
     await new Promise(r => setTimeout(r, 250));
   }
