@@ -40,14 +40,14 @@
   onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
     const data = snap.docs.map(d => d.data());
     localStorage.setItem('ehon_shelf', JSON.stringify(data));
-    if (typeof onFirebaseShelfUpdate === 'function') onFirebaseShelfUpdate(data);
+    if (typeof window.onFirebaseShelfUpdate === 'function') window.onFirebaseShelfUpdate(data);
   });
 
   // リアルタイム同期：records
   onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
     const data = snap.docs.map(d => d.data());
     localStorage.setItem('ehon_records', JSON.stringify(data));
-    if (typeof onFirebaseRecordsUpdate === 'function') onFirebaseRecordsUpdate(data);
+    if (typeof window.onFirebaseRecordsUpdate === 'function') window.onFirebaseRecordsUpdate(data);
   });
 
   window._firebaseReady = true;
@@ -1047,18 +1047,18 @@ body {
 let shelf   = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
 let records = JSON.parse(localStorage.getItem('ehon_records') || '[]');
 
-// Firebase → ローカル変数への橋渡しコールバック
-function onFirebaseShelfUpdate(data) {
+// Firebase → ローカル変数への橋渡しコールバック（window経由でmoduleから呼べるように）
+window.onFirebaseShelfUpdate = function(data) {
   shelf = data;
   renderAll();
   clearTimeout(window._backfillTimer);
   window._backfillTimer = setTimeout(backfillMissingCovers, 1500);
-}
-function onFirebaseRecordsUpdate(data) {
+};
+window.onFirebaseRecordsUpdate = function(data) {
   records = data;
   renderAll();
   renderRecordList();
-}
+};
 
 let currentBookData   = null;
 let currentReader     = '';
