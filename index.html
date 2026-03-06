@@ -36,25 +36,18 @@
   };
 
   // リアルタイム同期：shelf
+  // type="module"スコープからlet shelfに直接アクセス不可 → コールバック経由で渡す
   onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
-    shelf = snap.docs.map(d => d.data());
-    window.shelf = shelf; // 後方互換
-    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
-    if (typeof renderAll === 'function') renderAll();
-    // 表紙なし本の補完（初回ロード後に1回だけ実行）
-    if (typeof backfillMissingCovers === 'function') {
-      clearTimeout(window._backfillTimer);
-      window._backfillTimer = setTimeout(backfillMissingCovers, 1500);
-    }
+    const data = snap.docs.map(d => d.data());
+    localStorage.setItem('ehon_shelf', JSON.stringify(data));
+    if (typeof onFirebaseShelfUpdate === 'function') onFirebaseShelfUpdate(data);
   });
 
   // リアルタイム同期：records
   onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
-    records = snap.docs.map(d => d.data());
-    window.records = records;
-    localStorage.setItem('ehon_records', JSON.stringify(records));
-    if (typeof renderAll === 'function') renderAll();
-    if (typeof renderRecordList === 'function') renderRecordList();
+    const data = snap.docs.map(d => d.data());
+    localStorage.setItem('ehon_records', JSON.stringify(data));
+    if (typeof onFirebaseRecordsUpdate === 'function') onFirebaseRecordsUpdate(data);
   });
 
   window._firebaseReady = true;
@@ -1054,6 +1047,19 @@ body {
 let shelf   = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
 let records = JSON.parse(localStorage.getItem('ehon_records') || '[]');
 
+// Firebase → ローカル変数への橋渡しコールバック
+function onFirebaseShelfUpdate(data) {
+  shelf = data;
+  renderAll();
+  clearTimeout(window._backfillTimer);
+  window._backfillTimer = setTimeout(backfillMissingCovers, 1500);
+}
+function onFirebaseRecordsUpdate(data) {
+  records = data;
+  renderAll();
+  renderRecordList();
+}
+
 let currentBookData   = null;
 let currentReader     = '';
 let selectedShelfBook = null;
@@ -1951,3 +1957,484 @@ async function backfillMissingCovers(forceAll = false) {
     showToast('✅ 表紙の確認が完了しました');
   }
 }
+
+// ===== SHELF MODAL FLOW =====
+async function fetchAndOpenShelfModal(isbn) {
+  isbn = String(isbn).replace(/[^0-9X]/g,'');
+  if (!isbn || isbn.length < 10) { showToast('ISBNを正しく入力してください'); return; }
+  const existingBook = shelf.find(b => b.isbn === isbn);
+  if (existingBook) {
+    openBookDetail(existingBook.isbn);
+    setTimeout(() => showToast('📚 この本はすでに本棚に登録されています'), 200);
+    return;
+  }
+
+  // モーダルを開いてローディング
+  document.getElementById('as-title').textContent = '情報を取得中...';
+  document.getElementById('as-title').className   = 'b-title b-loading';
+  document.getElementById('as-author').textContent= '';
+  document.getElementById('as-isbn').textContent  = 'ISBN: ' + isbn;
+  document.getElementById('as-cover').innerHTML   = '📚';
+  document.getElementById('as-saveBtn').disabled  = true;
+  document.getElementById('as-borrowed').checked  = false;
+  document.getElementById('as-borrowedRow').classList.remove('checked');
+  document.getElementById('addShelfModal').classList.add('open');
+  currentBookData = null;
+
+  const book = await fetchBook(isbn);
+  if (book) {
+    currentBookData = book;
+    document.getElementById('as-title').textContent  = book.title;
+    document.getElementById('as-title').className    = 'b-title';
+    document.getElementById('as-author').textContent = book.author;
+    document.getElementById('as-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
+    document.getElementById('as-saveBtn').disabled          = false;
+    document.getElementById('as-saveAndRecordBtn').disabled = false;
+  } else {
+    document.getElementById('as-title').textContent = '書籍情報が見つかりませんでした';
+    showToast('⚠️ 情報を取得できませんでした（コンソール参照）');
+  }
+}
+function closeAddShelfModal() { document.getElementById('addShelfModal').classList.remove('open'); }
+function saveToShelf(andRecord = false) {
+  if (!currentBookData) return;
+  currentBookData.addedAt  = new Date().toISOString().slice(0,10);
+  currentBookData.borrowed = document.getElementById('as-borrowed').checked;
+  const bookToRecord = { ...currentBookData };
+  if (window._firebaseReady && window._fsAddShelf) {
+    window._fsAddShelf(currentBookData)
+      .then(() => {
+        showToast(andRecord ? '📦 登録完了！読書記録をつけましょう' : '📦 本棚に登録しました！');
+        if (andRecord) openAddRecordModal(bookToRecord);
+      })
+      .catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); });
+  } else {
+    shelf.unshift(currentBookData);
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+    renderAll();
+    showToast(andRecord ? '📦 登録完了！読書記録をつけましょう' : '📦 本棚に登録しました（オフライン）');
+    if (andRecord) openAddRecordModal(bookToRecord);
+  }
+  closeAddShelfModal();
+}
+
+// ===== TITLE SEARCH MODAL =====
+function openTitleSearchModal() {
+  document.getElementById('titleSearchInput').value = '';
+  document.getElementById('titleSearchResults').innerHTML = '';
+  document.getElementById('titleSearchModal').classList.add('open');
+  setTimeout(() => document.getElementById('titleSearchInput').focus(), 300);
+}
+function closeTitleSearchModal() {
+  document.getElementById('titleSearchModal').classList.remove('open');
+}
+
+async function doTitleSearch() {
+  const q = document.getElementById('titleSearchInput').value.trim();
+  if (!q) return;
+  const el = document.getElementById('titleSearchResults');
+  el.innerHTML = '<div class="search-loading">🔍 検索中...</div>';
+
+  const results = await searchBooksByTitle(q);
+  if (results.length === 0) {
+    el.innerHTML = '<div class="search-loading">見つかりませんでした</div>';
+    return;
+  }
+
+  el.innerHTML = results.map((b, i) => {
+    const cv = coverImgHtml(b.cover, b.coverFallbacks);
+    const srcColor = b.src === 'NDL' ? '#4ECDC4' : b.src === 'openBD' ? '#6C63FF' : '#999';
+    return `<div class="title-result-item" onclick="selectTitleResult(${i})">
+      <div class="tri-cover">${cv}</div>
+      <div style="flex:1;min-width:0">
+        <div class="tri-title">${esc(b.title)}</div>
+        <div class="tri-author">${esc(b.author) || '著者不明'}</div>
+        <div class="tri-src"><span style="color:${srcColor};font-weight:bold">${b.src}</span>${b.isbn ? ' · ' + b.isbn : ' · ISBN不明'}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // 検索結果を一時保存
+  window._titleSearchResults = results;
+}
+
+function selectTitleResult(idx) {
+  const book = window._titleSearchResults?.[idx];
+  if (!book) return;
+  closeTitleSearchModal();
+  // ISBN があれば通常フローへ、なければ直接登録確認モーダルへ
+  currentBookData = book;
+  document.getElementById('as-title').textContent  = book.title;
+  document.getElementById('as-title').className    = 'b-title';
+  document.getElementById('as-author').textContent = book.author;
+  document.getElementById('as-isbn').textContent   = book.isbn ? 'ISBN: ' + book.isbn : 'ISBN不明';
+  document.getElementById('as-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
+  document.getElementById('as-borrowed').checked   = false;
+  document.getElementById('as-borrowedRow').classList.remove('checked');
+  document.getElementById('as-saveBtn').disabled          = false;
+  document.getElementById('as-saveAndRecordBtn').disabled = false;
+  document.getElementById('addShelfModal').classList.add('open');
+}
+
+// ===== BOOK DETAIL =====
+function openBookDetail(isbn) {
+  const book = shelf.find(b => b.isbn === isbn);
+  if (!book) return;
+  detailBook = book;
+  document.getElementById('bd-title').textContent  = book.title;
+  document.getElementById('bd-author').textContent = book.author;
+  const borrowedTxt = book.borrowed ? '  📚 借りた本' : '';
+  document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '') + borrowedTxt;
+  document.getElementById('bd-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
+
+  const bookRecs = records.filter(r => r.isbn === isbn);
+  const listEl   = document.getElementById('bd-readList');
+  if (bookRecs.length === 0) {
+    listEl.innerHTML = '<div style="color:#ccc;font-size:0.82rem;padding:8px 0">まだ記録がありません</div>';
+  } else {
+    listEl.innerHTML = bookRecs.map(r => {
+      const tag  = r.reader==='son' ? '👦 えつき' : r.reader==='daughter' ? '👧 ふみほ' : '👨‍👧‍👦 ふたり';
+      const date = r.date ? r.date.replace(/-/g,'/') : '';
+      return `<div class="detail-read-item">
+        <span>${tag}</span>
+        <span style="color:#ccc;font-size:0.78rem">${date}</span>
+        <span style="flex:1;color:#888;font-size:0.78rem">${r.comment ? '— '+esc(r.comment) : ''}</span>
+        <button onclick="deleteRecord(${r.id})" style="background:none;border:none;color:#ddd;cursor:pointer">🗑</button>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('bookDetailModal').classList.add('open');
+}
+function closeBookDetail() {
+  document.getElementById('bookDetailModal').classList.remove('open');
+  detailBook = null;
+}
+function openRecordFromDetail() {
+  const book = detailBook;
+  closeBookDetail();
+  if (book) openAddRecordModal(book);
+}
+function deleteFromShelf() {
+  if (!detailBook) return;
+  if (!confirm(`「${detailBook.title}」を本棚から削除しますか？\n（読書記録は残ります）`)) return;
+  const isbn = detailBook.isbn;
+  closeBookDetail();
+  if (window._firebaseReady && window._fsDeleteShelf) {
+    window._fsDeleteShelf(isbn)
+      .then(() => showToast('🗑 本棚から削除しました'))
+      .catch(e => { console.error(e); showToast('⚠️ 削除に失敗しました'); });
+  } else {
+    shelf = shelf.filter(b => b.isbn !== isbn);
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+    renderAll();
+    showToast('🗑 本棚から削除しました');
+  }
+}
+
+// ===== RECORD PAGE — BOOK SEARCH =====
+function renderRecordBookSearch() {
+  const q  = document.getElementById('recordBookSearch').value.trim().toLowerCase();
+  const el = document.getElementById('recordBookResults');
+  if (!q) { el.innerHTML = ''; return; }
+
+  if (shelf.length === 0) {
+    el.innerHTML = `<div style="color:#bbb;font-size:0.83rem;padding:8px 0 12px">
+      まずは「本棚」タブで絵本を登録してください</div>`;
+    return;
+  }
+  const hits = shelf.filter(b => b.title.toLowerCase().includes(q)).slice(0,6);
+  if (hits.length === 0) {
+    el.innerHTML = `<div style="color:#bbb;font-size:0.83rem;padding:8px 0 12px">本棚に見つかりませんでした</div>`;
+    return;
+  }
+  el.innerHTML = hits.map(b => {
+    const cv = b.cover ? `<img src="${b.cover}" alt="" onerror="this.parentElement.innerHTML='📚'">` : '📚';
+    return `<div class="book-search-result" onclick="pickBookForRecord('${b.isbn}')">
+      <div class="bsr-cover">${cv}</div>
+      <div>
+        <div class="bsr-title">${esc(b.title)}</div>
+        <div class="bsr-author">${esc(b.author)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function pickBookForRecord(isbn) {
+  const book = shelf.find(b => b.isbn === isbn);
+  if (!book) return;
+  document.getElementById('recordBookSearch').value = '';
+  document.getElementById('recordBookResults').innerHTML = '';
+  openAddRecordModal(book);
+}
+
+// ===== ADD RECORD MODAL =====
+function openAddRecordModal(book) {
+  selectedShelfBook = book;
+  currentReader = '';
+  ['rb-son','rb-daughter','rb-both'].forEach(id => document.getElementById(id).className='reader-btn');
+  document.getElementById('ar-comment').value  = '';
+  document.getElementById('ar-date').valueAsDate = new Date();
+  document.getElementById('ar-borrowed').checked = false;
+  document.getElementById('borrowedRow').classList.remove('checked');
+  document.getElementById('ar-title').textContent  = book.title;
+  document.getElementById('ar-author').textContent = book.author;
+  document.getElementById('ar-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
+  document.getElementById('addRecordModal').classList.add('open');
+}
+function closeAddRecordModal() { document.getElementById('addRecordModal').classList.remove('open'); }
+
+function toggleReaction(btn) {
+  btn.classList.toggle('selected');
+}
+
+function toggleBorrowed() {
+  const cb  = document.getElementById('ar-borrowed');
+  const row = document.getElementById('borrowedRow');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+}
+
+function toggleShelfBorrowed() {
+  const cb  = document.getElementById('as-borrowed');
+  const row = document.getElementById('as-borrowedRow');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+}
+
+function selectReader(who) {
+  currentReader = who;
+  document.getElementById('rb-son').className      = 'reader-btn' + (who==='son'      ? ' sel-son'      : '');
+  document.getElementById('rb-daughter').className = 'reader-btn' + (who==='daughter' ? ' sel-daughter' : '');
+  document.getElementById('rb-both').className     = 'reader-btn' + (who==='both'     ? ' sel-both'     : '');
+}
+
+function saveRecord() {
+  if (!currentReader)     { showToast('だれと読んだか選んでください'); return; }
+  if (!selectedShelfBook) { showToast('本を選んでください'); return; }
+  const reactions = Array.from(
+    document.querySelectorAll('#reactionRow .reaction-btn.selected')
+  ).map(b => b.dataset.val);
+  const rec = {
+    id:             Date.now(),
+    isbn:           selectedShelfBook.isbn,
+    title:          selectedShelfBook.title,
+    author:         selectedShelfBook.author,
+    cover:          selectedShelfBook.cover,
+    coverFallbacks: selectedShelfBook.coverFallbacks || [],
+    reader:         currentReader,
+    date:           document.getElementById('ar-date').value,
+    comment:        document.getElementById('ar-comment').value.trim(),
+    parentComment:  document.getElementById('ar-parent-comment').value.trim(),
+    reactions,
+    borrowed:       document.getElementById('ar-borrowed').checked
+  };
+  if (window._firebaseReady && window._fsAddRecord) {
+    window._fsAddRecord(rec)
+      .then(() => showToast('📖 読書を記録しました！'))
+      .catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); });
+  } else {
+    records.unshift(rec);
+    localStorage.setItem('ehon_records', JSON.stringify(records));
+    renderAll();
+    renderRecordList();
+    showToast('📖 読書を記録しました（オフライン）');
+  }
+  closeAddRecordModal();
+}
+
+// ===== RECORD LIST =====
+// ===== MONTH FILTER =====
+function getAvailableMonths() {
+  const months = [...new Set(records.map(r => r.date ? r.date.slice(0,7) : null).filter(Boolean))];
+  return months.sort().reverse(); // 新しい順
+}
+
+function changeMonth(dir) {
+  const months = getAvailableMonths();
+  if (months.length === 0) return;
+  if (!currentMonth) {
+    // 全期間→dirが-1なら最新月、+1なら最古月
+    currentMonth = dir < 0 ? months[0] : months[months.length - 1];
+  } else {
+    const idx = months.indexOf(currentMonth);
+    const next = idx + (-dir); // 配列は新しい順なので逆
+    if (next < 0 || next >= months.length) return;
+    currentMonth = months[next];
+  }
+  updateMonthLabel();
+  renderRecordList();
+}
+
+function resetMonth() {
+  currentMonth = null;
+  updateMonthLabel();
+  renderRecordList();
+}
+
+function updateMonthLabel() {
+  const lbl = document.getElementById('monthLabel');
+  const btn = document.getElementById('monthAllBtn');
+  if (!lbl || !btn) return;
+  if (!currentMonth) {
+    lbl.textContent = '全期間';
+    btn.classList.add('active');
+  } else {
+    const [y, m] = currentMonth.split('-');
+    const cnt = records.filter(r => r.date && r.date.startsWith(currentMonth)).length;
+    lbl.textContent = y + '年' + parseInt(m) + '月  (' + cnt + '冊)';
+    btn.classList.remove('active');
+  }
+}
+
+function setRecordFilter(f, btn) {
+  recordFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderRecordList();
+}
+
+function renderRecordList() {
+  let list = records.filter(r => {
+    if (recordFilter==='son')      return r.reader==='son'      || r.reader==='both';
+    if (recordFilter==='daughter') return r.reader==='daughter' || r.reader==='both';
+    if (recordFilter==='both')     return r.reader==='both';
+    return true;
+  });
+  // 月フィルター
+  if (currentMonth) {
+    list = list.filter(r => r.date && r.date.startsWith(currentMonth));
+  }
+  const el = document.getElementById('recordList');
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">📖</div>
+      <div class="empty-text">${currentMonth ? 'この月の記録はありません' : 'まだ記録がありません<br>上の検索で本を選んで<br>記録をつけましょう！'}</div>
+    </div>`;
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const tag  = r.reader==='son'
+      ? '<span class="reader-tag tag-son">👦 えつき</span>'
+      : r.reader==='daughter'
+      ? '<span class="reader-tag tag-daughter">👧 ふみほ</span>'
+      : '<span class="reader-tag tag-both">👨‍👧‍👦 ふたり</span>';
+    const borrowed = r.borrowed ? '<span class="reader-tag tag-borrowed">📚 借りた本</span>' : '';
+    const date = r.date ? r.date.replace(/-/g,'/') : '';
+    const cv   = coverImgHtml(r.cover, r.coverFallbacks);
+    const reactions = (r.reactions||[]).length > 0
+      ? `<div class="record-reactions">${r.reactions.map(e=>`<span class="reaction-tag">${e}</span>`).join('')}</div>` : '';
+    const cmt  = r.comment
+      ? `<div class="child-comment-display">💬 ${esc(r.comment)}</div>` : '';
+    const pcmt = r.parentComment
+      ? `<div class="record-parent-comment">📝 ${esc(r.parentComment)}</div>` : '';
+    return `<div class="record-card">
+      <div class="record-cover">${cv}</div>
+      <div class="record-body">
+        <div class="record-title">${esc(r.title)}</div>
+        <div class="record-meta">${tag}${borrowed}<span class="record-date">${date}</span></div>
+        ${reactions}${cmt}${pcmt}
+      </div>
+      <button class="record-delete" onclick="deleteRecord(${r.id})">🗑️</button>
+    </div>`;
+  }).join('');
+}
+
+function deleteRecord(id) {
+  if (!confirm('この読書記録を削除しますか？')) return;
+  if (window._firebaseReady && window._fsDeleteRecord) {
+    window._fsDeleteRecord(id)
+      .then(() => {
+        if (detailBook) openBookDetail(detailBook.isbn);
+        showToast('🗑 記録を削除しました');
+      })
+      .catch(e => { console.error(e); showToast('⚠️ 削除に失敗しました'); });
+  } else {
+    records = records.filter(r => r.id !== id);
+    localStorage.setItem('ehon_records', JSON.stringify(records));
+    renderStats();
+    renderRecordList();
+    if (detailBook) openBookDetail(detailBook.isbn);
+  }
+}
+
+
+// ===== CSV EXPORT =====
+function csvEscape(v) {
+  v = String(v === null || v === undefined ? '' : v);
+  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+    v = '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
+function downloadCSV(filename, rows) {
+  var bom = '\uFEFF';
+  var csv = bom + rows.map(function(r) { return r.map(csvEscape).join(','); }).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('CSV を出力しました！');
+}
+
+function readerName(r) {
+  return r === 'son' ? 'えつき' : r === 'daughter' ? 'ふみほ' : 'ふたり';
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0,10).replace(/-/g,'');
+}
+
+function exportShelfCSV() {
+  if (shelf.length === 0) { showToast('本棚に本が登録されていません'); return; }
+  var header = ['タイトル', '著者', 'ISBN', '登録日'];
+  var rows   = shelf.map(function(b) {
+    return [b.title, b.author||'', b.isbn, b.addedAt||''];
+  });
+  downloadCSV('えほん本棚_' + todayStr() + '.csv', [header].concat(rows));
+}
+
+function exportRecordsCSV() {
+  if (records.length === 0) { showToast('読書記録がありません'); return; }
+  var header = ['タイトル', '著者', 'ISBN', '読んだ日', '読んだ人', 'コメント'];
+  var rows   = records.map(function(r) {
+    return [r.title, r.author||'', r.isbn, r.date||'', readerName(r.reader), r.comment||''];
+  });
+  downloadCSV('えほん読書きろく_' + todayStr() + '.csv', [header].concat(rows));
+}
+
+function exportAllCSV() {
+  if (shelf.length === 0 && records.length === 0) { showToast('データがありません'); return; }
+  var rows = [];
+  rows.push(['【本棚データ】', '', '', '', '', '']);
+  rows.push(['タイトル', '著者', 'ISBN', '登録日', '', '']);
+  shelf.forEach(function(b) {
+    rows.push([b.title, b.author||'', b.isbn, b.addedAt||'', '', '']);
+  });
+  rows.push(['', '', '', '', '', '']);
+  rows.push(['【読書きろく】', '', '', '', '', '']);
+  rows.push(['タイトル', '著者', 'ISBN', '読んだ日', '読んだ人', 'コメント']);
+  records.forEach(function(r) {
+    rows.push([r.title, r.author||'', r.isbn, r.date||'', readerName(r.reader), r.comment||'']);
+  });
+  downloadCSV('えほんきろく_全データ_' + todayStr() + '.csv', rows);
+}
+
+// ===== UTILS =====
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
