@@ -305,6 +305,23 @@ body {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .book-thumb-count { margin-top: 4px; font-size: 0.65rem; color: #bbb; }
+.book-thumb-fav {
+  position: absolute; top: 5px; right: 5px;
+  font-size: 1.1rem; line-height: 1; cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
+  z-index: 2; transition: transform 0.15s;
+}
+.book-thumb-fav:active { transform: scale(1.4); }
+.shelf-filter-row {
+  display: flex; gap: 7px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.shelf-chip {
+  padding: 6px 14px; border-radius: 20px; border: none; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.78rem;
+  background: var(--warm); color: var(--navy); transition: all 0.15s;
+  white-space: nowrap;
+}
+.shelf-chip.active { background: var(--navy); color: white; }
 
 /* RECORD CARDS */
 .record-card {
@@ -734,6 +751,12 @@ body {
   <div class="search-wrap">
     <span class="search-icon">🔍</span>
     <input class="search-input" id="shelfSearch" placeholder="タイトルで絞り込む..." oninput="renderShelf()">
+  </div>
+  <div class="shelf-filter-row">
+    <button class="shelf-chip active" id="sc-all"      onclick="setShelfFilter('all',this)">すべて</button>
+    <button class="shelf-chip"        id="sc-fav"      onclick="setShelfFilter('fav',this)">♡ お気に入り</button>
+    <button class="shelf-chip"        id="sc-borrowed" onclick="setShelfFilter('borrowed',this)">📚 借りた本</button>
+    <button class="shelf-chip"        id="sc-unread"   onclick="setShelfFilter('unread',this)">未読</button>
   </div>
   <div class="book-grid" id="shelfGrid"></div>
 </div>
@@ -1281,25 +1304,44 @@ function renderStats() {
   document.getElementById('statDaughter').textContent = records.filter(r => r.reader === 'daughter' || r.reader === 'both').length;
 }
 
+let shelfFilter = 'all';
+
+function setShelfFilter(f, btn) {
+  shelfFilter = f;
+  document.querySelectorAll('.shelf-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderShelf();
+}
+
 function renderShelf() {
   const q = document.getElementById('shelfSearch').value.trim().toLowerCase();
-  const list = q ? shelf.filter(b => b.title.toLowerCase().includes(q)) : shelf;
+  let list = q ? shelf.filter(b => b.title.toLowerCase().includes(q)) : [...shelf];
+  // フィルター適用
+  if (shelfFilter === 'fav')      list = list.filter(b => b.fav);
+  if (shelfFilter === 'borrowed') list = list.filter(b => b.borrowed);
+  if (shelfFilter === 'unread')   list = list.filter(b => !records.some(r => r.isbn === b.isbn));
   document.getElementById('shelfCount').textContent = shelf.length;
   const grid = document.getElementById('shelfGrid');
   if (list.length === 0) {
+    const msgs = { fav:'お気に入りはまだありません<br>♡ボタンでマークしましょう', borrowed:'借りた本はありません', unread:'未読の本はありません' };
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
-      <div class="empty-icon">📦</div>
-      <div class="empty-text">${shelf.length === 0
+      <div class="empty-icon">${shelfFilter==='fav'?'♡':'📦'}</div>
+      <div class="empty-text">${msgs[shelfFilter] || (shelf.length===0
         ? 'まだ本が登録されていません<br>バーコードをスキャンして<br>本棚に追加しましょう！'
-        : '見つかりませんでした'}</div></div>`;
+        : '見つかりませんでした')}</div></div>`;
     return;
   }
+  if (shelfViewMode === 'series') { renderShelfSeries(list); return; }
   grid.innerHTML = list.map(b => {
     const cnt = records.filter(r => r.isbn === b.isbn).length;
     const cv  = coverImgHtml(b.cover, b.coverFallbacks, '');
+    const favIcon = b.fav ? '♥' : '♡';
+    const favColor = b.fav ? 'color:#E91E63' : 'color:rgba(255,255,255,0.7)';
     const borrowedBadge = b.borrowed ? '<div style="font-size:0.6rem;color:#E65100;margin-top:2px">📚 借りた本</div>' : '';
-    return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
+    return `<div class="book-thumb" style="position:relative" onclick="openBookDetail('${b.isbn}')">
       <div class="book-thumb-cover">${cv}</div>
+      <span class="book-thumb-fav" style="${favColor}"
+        onclick="event.stopPropagation();toggleFav('${b.isbn}')">${favIcon}</span>
       <div class="book-thumb-info">
         <div class="book-thumb-title">${esc(b.title)}</div>
         <div class="book-thumb-count">${cnt > 0 ? `📖 ${cnt}回` : '未読'}</div>
@@ -1307,6 +1349,18 @@ function renderShelf() {
       </div>
     </div>`;
   }).join('');
+}
+
+function toggleFav(isbn) {
+  const book = shelf.find(b => b.isbn === isbn);
+  if (!book) return;
+  book.fav = !book.fav;
+  if (window._firebaseReady && window._fsAddShelf) {
+    window._fsAddShelf(book).catch(() => {});
+  } else {
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+  }
+  renderShelf();
 }
 
 // ===== CAMERA =====
