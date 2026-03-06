@@ -5,56 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>えほんきろく</title>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-  const firebaseConfig = {
-    apiKey: "AIzaSyBYwqx1EWud8gO_d2Nc3ZYLYCz8qhXKfq8",
-    authDomain: "ehon-kiroku.firebaseapp.com",
-    projectId: "ehon-kiroku",
-    storageBucket: "ehon-kiroku.firebasestorage.app",
-    messagingSenderId: "518204367200",
-    appId: "1:518204367200:web:1c06e02d2956c4ea5d7e05"
-  };
-
-  const app = initializeApp(firebaseConfig);
-  const db  = getFirestore(app);
-
-  // Firestore書き込み関数をグローバルに公開
-  window._fsAddShelf = async (book) => {
-    await setDoc(doc(db, 'shelf', book.isbn), book);
-  };
-  window._fsDeleteShelf = async (isbn) => {
-    await deleteDoc(doc(db, 'shelf', isbn));
-  };
-  window._fsAddRecord = async (rec) => {
-    await setDoc(doc(db, 'records', String(rec.id)), rec);
-  };
-  window._fsDeleteRecord = async (id) => {
-    await deleteDoc(doc(db, 'records', String(id)));
-  };
-
-  // リアルタイム同期：shelf
-  // type="module"スコープからlet shelfに直接アクセス不可 → コールバック経由で渡す
-  onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
-    const data = snap.docs.map(d => d.data());
-    localStorage.setItem('ehon_shelf', JSON.stringify(data));
-    if (typeof window.onFirebaseShelfUpdate === 'function') window.onFirebaseShelfUpdate(data);
-  });
-
-  // リアルタイム同期：records
-  onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
-    const data = snap.docs.map(d => d.data());
-    localStorage.setItem('ehon_records', JSON.stringify(data));
-    if (typeof window.onFirebaseRecordsUpdate === 'function') window.onFirebaseRecordsUpdate(data);
-  });
-
-  window._firebaseReady = true;
-  const el = document.getElementById('syncStatus');
-  if (el) el.textContent = '☁️ 同期中';
-  console.log('[えほんきろく] Firebase接続完了');
-</script>
 <link href="https://fonts.googleapis.com/css2?family=Kosugi+Maru&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -2435,6 +2385,65 @@ function showToast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
 }
+</script>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBYwqx1EWud8gO_d2Nc3ZYLYCz8qhXKfq8",
+    authDomain: "ehon-kiroku.firebaseapp.com",
+    projectId: "ehon-kiroku",
+    storageBucket: "ehon-kiroku.firebasestorage.app",
+    messagingSenderId: "518204367200",
+    appId: "1:518204367200:web:1c06e02d2956c4ea5d7e05"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db  = getFirestore(app);
+
+  // Firestore書き込み関数をグローバルに公開
+  window._fsAddShelf = async (book) => {
+    await setDoc(doc(db, 'shelf', book.isbn), book);
+  };
+  window._fsDeleteShelf = async (isbn) => {
+    await deleteDoc(doc(db, 'shelf', isbn));
+  };
+  window._fsAddRecord = async (rec) => {
+    await setDoc(doc(db, 'records', String(rec.id)), rec);
+  };
+  window._fsDeleteRecord = async (id) => {
+    await deleteDoc(doc(db, 'records', String(id)));
+  };
+
+  // リアルタイム同期：shelf
+  // type="module"スコープからlet shelfに直接アクセス不可 → コールバック経由で渡す
+  onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
+    const data = snap.docs.map(d => d.data());
+    console.log('[Firebase] shelf件数:', data.length, 'callback:', typeof window.onFirebaseShelfUpdate);
+    localStorage.setItem('ehon_shelf', JSON.stringify(data));
+    if (typeof window.onFirebaseShelfUpdate === 'function') {
+      window.onFirebaseShelfUpdate(data);
+    } else {
+      // コールバック未登録の場合は少し待ってリトライ
+      setTimeout(() => {
+        if (typeof window.onFirebaseShelfUpdate === 'function') window.onFirebaseShelfUpdate(data);
+      }, 500);
+    }
+  });
+
+  // リアルタイム同期：records
+  onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
+    const data = snap.docs.map(d => d.data());
+    localStorage.setItem('ehon_records', JSON.stringify(data));
+    if (typeof window.onFirebaseRecordsUpdate === 'function') window.onFirebaseRecordsUpdate(data);
+  });
+
+  window._firebaseReady = true;
+  const el = document.getElementById('syncStatus');
+  if (el) el.textContent = '☁️ 同期中';
+  console.log('[えほんきろく] Firebase接続完了');
 </script>
 </body>
 </html>
