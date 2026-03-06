@@ -745,7 +745,7 @@ body {
     <span>🗄 登録済みの絵本（<span id="shelfCount">0</span>冊）</span>
     <div style="display:flex;gap:6px">
       <button onclick="toggleShelfView()" id="shelfViewBtn" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📂 シリーズ</button>
-      <button onclick="backfillMissingCovers(true)" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📷 表紙</button>
+      <button onclick="backfillMissingCovers(true)" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📷 表紙再取得</button>
     </div>
   </div>
   <div class="search-wrap">
@@ -1557,12 +1557,13 @@ async function registerQueuedBooks() {
   let count = 0;
   for (const book of toRegister) {
     const data = {
-      isbn:     book.isbn,
-      title:    book.title,
-      author:   book.author  || '',
-      cover:    book.cover   || null,
-      addedAt:  new Date().toISOString().slice(0,10),
-      borrowed: false,
+      isbn:           book.isbn,
+      title:          book.title,
+      author:         book.author         || '',
+      cover:          book.cover          || null,
+      coverFallbacks: book.coverFallbacks || [],
+      addedAt:        new Date().toISOString().slice(0,10),
+      borrowed:       false,
     };
     if (window._firebaseReady && window._fsAddShelf) {
       await window._fsAddShelf(data).catch(() => {});
