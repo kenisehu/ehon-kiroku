@@ -997,18 +997,31 @@ body {
 let shelf   = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
 let records = JSON.parse(localStorage.getItem('ehon_records') || '[]');
 
-// Firebase → ローカル変数への橋渡しコールバック（window経由でmoduleから呼べるように）
-window.onFirebaseShelfUpdate = function(data) {
-  shelf = data;
-  renderAll();
-  clearTimeout(window._backfillTimer);
-  window._backfillTimer = setTimeout(backfillMissingCovers, 1500);
+// Firebaseからのデータを受け取って画面に反映する
+// type=moduleのonSnapshotは window._pendingShelf/Records にデータを置く
+// _applyFirebaseData が呼ばれたときに let shelf/records に代入してrender
+window._applyFirebaseData = function() {
+  let changed = false;
+  if (window._pendingShelf !== undefined) {
+    shelf = window._pendingShelf;
+    window._pendingShelf = undefined;
+    changed = true;
+  }
+  if (window._pendingRecords !== undefined) {
+    records = window._pendingRecords;
+    window._pendingRecords = undefined;
+    changed = true;
+  }
+  if (changed) {
+    renderAll();
+    renderRecordList();
+    clearTimeout(window._backfillTimer);
+    window._backfillTimer = setTimeout(backfillMissingCovers, 1500);
+  }
 };
-window.onFirebaseRecordsUpdate = function(data) {
-  records = data;
-  renderAll();
-  renderRecordList();
-};
+// 後方互換
+window.onFirebaseShelfUpdate   = function(data) { shelf   = data; renderAll(); };
+window.onFirebaseRecordsUpdate = function(data) { records = data; renderAll(); renderRecordList(); };
 
 let currentBookData   = null;
 let currentReader     = '';
@@ -2388,6 +2401,7 @@ function showToast(msg) {
 </script>
 
 <script type="module">
+  // Firebase SDK (ESM) を使いつつ、初期化は本体script読み込み後に確実に行う
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
@@ -2403,47 +2417,31 @@ function showToast(msg) {
   const app = initializeApp(firebaseConfig);
   const db  = getFirestore(app);
 
-  // Firestore書き込み関数をグローバルに公開
-  window._fsAddShelf = async (book) => {
-    await setDoc(doc(db, 'shelf', book.isbn), book);
-  };
-  window._fsDeleteShelf = async (isbn) => {
-    await deleteDoc(doc(db, 'shelf', isbn));
-  };
-  window._fsAddRecord = async (rec) => {
-    await setDoc(doc(db, 'records', String(rec.id)), rec);
-  };
-  window._fsDeleteRecord = async (id) => {
-    await deleteDoc(doc(db, 'records', String(id)));
-  };
+  window._fsAddShelf     = async (book) => { await setDoc(doc(db, 'shelf', book.isbn), book); };
+  window._fsDeleteShelf  = async (isbn) => { await deleteDoc(doc(db, 'shelf', isbn)); };
+  window._fsAddRecord    = async (rec)  => { await setDoc(doc(db, 'records', String(rec.id)), rec); };
+  window._fsDeleteRecord = async (id)   => { await deleteDoc(doc(db, 'records', String(id))); };
 
-  // リアルタイム同期：shelf
-  // type="module"スコープからlet shelfに直接アクセス不可 → コールバック経由で渡す
+  // onSnapshot: データが来たらshelf/recordsに直接代入してrenderAll
+  // type=moduleからlet shelf/recordsには直接触れないため window.shelf/records を介する
+  // 本体側で window.shelf と let shelf を同じ参照にしておく
   onSnapshot(query(collection(db, 'shelf'), orderBy('addedAt', 'desc')), snap => {
     const data = snap.docs.map(d => d.data());
-    console.log('[Firebase] shelf件数:', data.length, 'callback:', typeof window.onFirebaseShelfUpdate);
     localStorage.setItem('ehon_shelf', JSON.stringify(data));
-    if (typeof window.onFirebaseShelfUpdate === 'function') {
-      window.onFirebaseShelfUpdate(data);
-    } else {
-      // コールバック未登録の場合は少し待ってリトライ
-      setTimeout(() => {
-        if (typeof window.onFirebaseShelfUpdate === 'function') window.onFirebaseShelfUpdate(data);
-      }, 500);
-    }
+    window._pendingShelf = data;
+    window._applyFirebaseData && window._applyFirebaseData();
   });
 
-  // リアルタイム同期：records
   onSnapshot(query(collection(db, 'records'), orderBy('id', 'desc')), snap => {
     const data = snap.docs.map(d => d.data());
     localStorage.setItem('ehon_records', JSON.stringify(data));
-    if (typeof window.onFirebaseRecordsUpdate === 'function') window.onFirebaseRecordsUpdate(data);
+    window._pendingRecords = data;
+    window._applyFirebaseData && window._applyFirebaseData();
   });
 
   window._firebaseReady = true;
   const el = document.getElementById('syncStatus');
   if (el) el.textContent = '☁️ 同期中';
-  console.log('[えほんきろく] Firebase接続完了');
 </script>
 </body>
 </html>
