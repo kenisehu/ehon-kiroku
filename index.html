@@ -161,6 +161,91 @@ body {
 .page { display: none; padding: 16px 16px 90px; }
 .page.active { display: block; }
 
+/* STATS PAGE */
+.rank-card {
+  background: white; border-radius: 16px; padding: 14px 16px;
+  margin-bottom: 10px; display: flex; align-items: center; gap: 14px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.rank-num {
+  font-family: 'Nunito', sans-serif; font-weight: 900;
+  font-size: 1.4rem; color: #ddd; width: 28px; text-align: center; flex-shrink: 0;
+}
+.rank-num.gold   { color: #FFD700; }
+.rank-num.silver { color: #C0C0C0; }
+.rank-num.bronze { color: #CD7F32; }
+.rank-cover {
+  width: 44px; height: 56px; border-radius: 6px; background: var(--warm);
+  flex-shrink: 0; overflow: hidden; display: flex; align-items: center;
+  justify-content: center; font-size: 1.4rem;
+}
+.rank-cover img { width: 100%; height: 100%; object-fit: cover; }
+.rank-info { flex: 1; min-width: 0; }
+.rank-title { font-size: 0.87rem; font-weight: bold; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rank-sub   { font-size: 0.72rem; color: #aaa; margin-top: 3px; }
+.rank-count { font-family: 'Nunito', sans-serif; font-weight: 900; font-size: 1.3rem; color: var(--teal-dark); flex-shrink: 0; }
+.rank-count span { font-size: 0.65rem; color: #aaa; }
+.stats-section-title {
+  font-size: 0.82rem; font-weight: bold; color: var(--navy);
+  margin: 20px 0 10px; letter-spacing: 0.05em;
+}
+.stat-filter-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.stat-filter-btn {
+  padding: 6px 14px; border-radius: 20px; border: none; cursor: pointer;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.8rem;
+  background: var(--warm); color: var(--navy); transition: all 0.15s;
+}
+.stat-filter-btn.active { background: var(--navy); color: white; }
+.big-stat-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 18px; }
+.big-stat-card {
+  background: white; border-radius: 14px; padding: 14px 10px;
+  text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.big-stat-num   { font-family: 'Nunito', sans-serif; font-weight: 900; font-size: 1.8rem; color: var(--navy); }
+.big-stat-label { font-size: 0.68rem; color: #aaa; margin-top: 2px; }
+
+/* SERIES */
+.series-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; background: white; border-radius: 14px 14px 0 0;
+  margin-top: 12px; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.series-header.collapsed { border-radius: 14px; }
+.series-title { font-size: 0.9rem; font-weight: bold; color: var(--navy); flex: 1; }
+.series-count { font-size: 0.75rem; color: #aaa; }
+.series-arrow { font-size: 0.8rem; color: #ccc; transition: transform 0.2s; }
+.series-arrow.open { transform: rotate(90deg); }
+.series-books {
+  background: white; border-radius: 0 0 14px 14px;
+  padding: 0 10px 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+}
+.series-tag-input {
+  width: 100%; padding: 8px 12px; border: 1.5px solid var(--warm); border-radius: 10px;
+  font-family: 'Kosugi Maru', sans-serif; font-size: 0.82rem; margin-bottom: 8px;
+  outline: none; background: #fffaf5;
+}
+.series-tag-input:focus { border-color: var(--teal); }
+
+/* COMMENT ENRICHMENT */
+.reaction-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.reaction-btn {
+  padding: 7px 12px; border-radius: 20px; border: 2px solid transparent;
+  background: var(--warm); font-size: 0.85rem; cursor: pointer;
+  transition: all 0.15s; font-family: 'Kosugi Maru', sans-serif;
+}
+.reaction-btn.selected { background: var(--teal); border-color: var(--teal-dark); color: white; }
+.parent-comment-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.parent-label {
+  font-size: 0.72rem; color: var(--navy); font-weight: bold;
+  white-space: nowrap; padding-top: 10px;
+}
+.record-reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.reaction-tag {
+  font-size: 0.78rem; background: #FFF0E0; border-radius: 10px; padding: 2px 8px;
+}
+.record-parent-comment { font-size: 0.78rem; color: #888; margin-top: 3px; }
+.child-comment-display  { font-size: 0.82rem; color: var(--navy); margin-top: 2px; }
+
 .section-title {
   font-family: 'Nunito', sans-serif;
   font-weight: 900;
@@ -641,7 +726,10 @@ body {
 
   <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
     <span>🗄 登録済みの絵本（<span id="shelfCount">0</span>冊）</span>
-    <button onclick="backfillMissingCovers(true)" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📷 表紙を再取得</button>
+    <div style="display:flex;gap:6px">
+      <button onclick="toggleShelfView()" id="shelfViewBtn" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📂 シリーズ</button>
+      <button onclick="backfillMissingCovers(true)" style="font-size:0.7rem;background:var(--warm);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;color:var(--navy);font-family:'Kosugi Maru',sans-serif">📷 表紙</button>
+    </div>
   </div>
   <div class="search-wrap">
     <span class="search-icon">🔍</span>
@@ -683,6 +771,39 @@ body {
 </div>
 
 <!-- PAGE: CSV出力 -->
+<div class="page" id="page-stats">
+  <br>
+  <div class="stat-filter-row">
+    <button class="stat-filter-btn active" id="sf-all"      onclick="setStatFilter('all',this)">📚 全員</button>
+    <button class="stat-filter-btn"        id="sf-son"      onclick="setStatFilter('son',this)">👦 えつき</button>
+    <button class="stat-filter-btn"        id="sf-daughter" onclick="setStatFilter('daughter',this)">👧 ふみほ</button>
+  </div>
+
+  <!-- サマリー数字 -->
+  <div class="big-stat-row">
+    <div class="big-stat-card">
+      <div class="big-stat-num" id="st-total">0</div>
+      <div class="big-stat-label">総読み聞かせ回数</div>
+    </div>
+    <div class="big-stat-card">
+      <div class="big-stat-num" id="st-books">0</div>
+      <div class="big-stat-label">読んだ本の種類</div>
+    </div>
+    <div class="big-stat-card">
+      <div class="big-stat-num" id="st-streak">0</div>
+      <div class="big-stat-label">連続読書日数</div>
+    </div>
+  </div>
+
+  <!-- ランキング -->
+  <div class="stats-section-title">🏆 よく読んだ本ランキング</div>
+  <div id="rankingList"></div>
+
+  <!-- 反応ランキング -->
+  <div class="stats-section-title">😂 もう1回が多い本</div>
+  <div id="repeatList"></div>
+</div>
+
 <div class="page" id="page-export">
   <br>
   <div class="section-title">📊 データを出力する</div>
@@ -726,10 +847,13 @@ body {
     <span class="nav-icon">🗄</span>本棚
   </button>
   <button class="nav-btn" id="nav-record" onclick="switchPage('record')">
-    <span class="nav-icon">📖</span>読書きろく
+    <span class="nav-icon">📖</span>きろく
+  </button>
+  <button class="nav-btn" id="nav-stats" onclick="switchPage('stats')">
+    <span class="nav-icon">🏆</span>統計
   </button>
   <button class="nav-btn" id="nav-export" onclick="switchPage('export')">
-    <span class="nav-icon">📊</span>CSV出力
+    <span class="nav-icon">📊</span>CSV
   </button>
 </nav>
 
@@ -850,8 +974,22 @@ body {
     <div class="field-label">読んだ日</div>
     <input class="field-input" type="date" id="ar-date">
 
-    <div class="field-label">ひとこと（任意）</div>
-    <textarea class="field-textarea" id="ar-comment" placeholder="感想やメモ... 🌟"></textarea>
+    <div class="field-label">子どもの反応 🎭（複数選択可）</div>
+    <div class="reaction-row" id="reactionRow">
+      <button class="reaction-btn" data-val="😂" onclick="toggleReaction(this)">😂 大笑い</button>
+      <button class="reaction-btn" data-val="😲" onclick="toggleReaction(this)">😲 びっくり</button>
+      <button class="reaction-btn" data-val="😢" onclick="toggleReaction(this)">😢 泣いた</button>
+      <button class="reaction-btn" data-val="😨" onclick="toggleReaction(this)">😨 こわかった</button>
+      <button class="reaction-btn" data-val="🤩" onclick="toggleReaction(this)">🤩 大好き！</button>
+      <button class="reaction-btn" data-val="🔁" onclick="toggleReaction(this)">🔁 もう1回！</button>
+      <button class="reaction-btn" data-val="😴" onclick="toggleReaction(this)">😴 ねむくなった</button>
+    </div>
+
+    <div class="field-label">子どものひとこと 💬（任意）</div>
+    <textarea class="field-textarea" id="ar-comment" placeholder="「また読んで！」「ぞうさんかわいい」など..."></textarea>
+
+    <div class="field-label">親のひとこと 📝（任意）</div>
+    <textarea class="field-textarea" id="ar-parent-comment" placeholder="気づいたこと、読み聞かせの様子など..."></textarea>
 
     <div class="borrowed-check-row" id="borrowedRow" onclick="toggleBorrowed()">
       <input type="checkbox" id="ar-borrowed" onclick="event.stopPropagation()">
@@ -916,11 +1054,225 @@ function switchPage(page) {
   document.getElementById('page-' + page).classList.add('active');
   document.getElementById('nav-' + page).classList.add('active');
   if (page === 'record') { renderRecordBookSearch(); renderRecordList(); }
-  if (page === 'export') { /* static page */ }
+  if (page === 'stats')  { renderStatsPage(); }
 }
 
 // ===== RENDER =====
 function renderAll() { renderStats(); renderShelf(); }
+
+// ===== STATS PAGE =====
+let statFilter = 'all';
+
+function setStatFilter(f, btn) {
+  statFilter = f;
+  document.querySelectorAll('.stat-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderStatsPage();
+}
+
+function getFilteredRecords() {
+  if (statFilter === 'son')      return records.filter(r => r.reader==='son'      || r.reader==='both');
+  if (statFilter === 'daughter') return records.filter(r => r.reader==='daughter' || r.reader==='both');
+  return records;
+}
+
+function calcStreak() {
+  const dates = [...new Set(records.map(r=>r.date).filter(Boolean))].sort().reverse();
+  if (!dates.length) return 0;
+  let streak = 0, cur = new Date(); cur.setHours(0,0,0,0);
+  for (const d of dates) {
+    const dt = new Date(d); dt.setHours(0,0,0,0);
+    const diff = Math.round((cur - dt) / 86400000);
+    if (diff > 1) break;
+    streak++; cur = dt;
+  }
+  return streak;
+}
+
+function renderStatsPage() {
+  const recs = getFilteredRecords();
+  // サマリー
+  const uniqueBooks = new Set(recs.map(r=>r.isbn)).size;
+  document.getElementById('st-total').textContent  = recs.length;
+  document.getElementById('st-books').textContent  = uniqueBooks;
+  document.getElementById('st-streak').textContent = calcStreak();
+
+  // ランキング（読んだ回数順）
+  const countMap = {};
+  for (const r of recs) {
+    if (!r.isbn) continue;
+    if (!countMap[r.isbn]) {
+      const b = shelf.find(b=>b.isbn===r.isbn) || r;
+      countMap[r.isbn] = { isbn:r.isbn, title:r.title, cover:r.cover, coverFallbacks:r.coverFallbacks||[], count:0 };
+    }
+    countMap[r.isbn].count++;
+  }
+  const ranked = Object.values(countMap).sort((a,b)=>b.count-a.count).slice(0,10);
+  const rankEl = document.getElementById('rankingList');
+  if (ranked.length === 0) { rankEl.innerHTML = '<div style="color:#ccc;font-size:0.85rem;padding:8px 0">まだ記録がありません</div>'; }
+  else {
+    rankEl.innerHTML = ranked.map((b,i) => {
+      const medalClass = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+      const cv = coverImgHtml(b.cover, b.coverFallbacks);
+      return `<div class="rank-card" onclick="openBookDetail('${b.isbn}')">
+        <div class="rank-num ${medalClass}">${i+1}</div>
+        <div class="rank-cover">${cv}</div>
+        <div class="rank-info">
+          <div class="rank-title">${esc(b.title)}</div>
+          <div class="rank-sub">${b.isbn}</div>
+        </div>
+        <div class="rank-count">${b.count}<span>回</span></div>
+      </div>`;
+    }).join('');
+  }
+
+  // 🔁「もう1回！」が多い本
+  const repeatMap = {};
+  for (const r of recs) {
+    if (!(r.reactions||[]).includes('🔁')) continue;
+    if (!r.isbn) continue;
+    if (!repeatMap[r.isbn]) repeatMap[r.isbn] = { isbn:r.isbn, title:r.title, cover:r.cover, coverFallbacks:r.coverFallbacks||[], count:0 };
+    repeatMap[r.isbn].count++;
+  }
+  const repeats = Object.values(repeatMap).sort((a,b)=>b.count-a.count).slice(0,5);
+  const repEl = document.getElementById('repeatList');
+  if (repeats.length === 0) { repEl.innerHTML = '<div style="color:#ccc;font-size:0.85rem;padding:8px 0">🔁 反応の記録がまだありません</div>'; }
+  else {
+    repEl.innerHTML = repeats.map((b,i) => {
+      const cv = coverImgHtml(b.cover, b.coverFallbacks);
+      return `<div class="rank-card" onclick="openBookDetail('${b.isbn}')">
+        <div class="rank-num" style="color:#FF8C42;font-size:1.1rem">🔁</div>
+        <div class="rank-cover">${cv}</div>
+        <div class="rank-info">
+          <div class="rank-title">${esc(b.title)}</div>
+        </div>
+        <div class="rank-count">${b.count}<span>回</span></div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ===== SERIES =====
+let shelfViewMode = 'grid'; // 'grid' | 'series'
+
+function toggleShelfView() {
+  shelfViewMode = shelfViewMode === 'grid' ? 'series' : 'grid';
+  const btn = document.getElementById('shelfViewBtn');
+  btn.textContent = shelfViewMode === 'series' ? '📋 グリッド' : '📂 シリーズ';
+  renderShelf();
+}
+
+// シリーズ判定：著者が同じ or タイトルに共通語がある
+function detectSeries(books) {
+  const groups = {};
+  const ungrouped = [];
+  for (const b of books) {
+    // 手動シリーズタグがあれば優先
+    if (b.seriesTag) {
+      if (!groups[b.seriesTag]) groups[b.seriesTag] = [];
+      groups[b.seriesTag].push(b);
+      continue;
+    }
+    // 自動判定：著者が同じで本が2冊以上
+    const key = (b.author||'').trim();
+    if (key) {
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(b);
+    } else {
+      ungrouped.push(b);
+    }
+  }
+  // 1冊だけのグループは ungrouped に移す
+  const result = { groups:{}, ungrouped:[] };
+  for (const [k,v] of Object.entries(groups)) {
+    if (v.length >= 2) result.groups[k] = v;
+    else result.ungrouped.push(...v);
+  }
+  result.ungrouped.push(...ungrouped);
+  return result;
+}
+
+function renderShelfSeries(books) {
+  const grid = document.getElementById('shelfGrid');
+  const { groups, ungrouped } = detectSeries(books);
+  let html = '';
+
+  // グループ表示
+  for (const [seriesKey, seriesBooks] of Object.entries(groups)) {
+    const id = 'sg_' + seriesKey.replace(/[^a-zA-Z0-9]/g,'_');
+    const totalCnt = seriesBooks.reduce((s,b)=>s+records.filter(r=>r.isbn===b.isbn).length,0);
+    html += `<div>
+      <div class="series-header" id="sh_${id}" onclick="toggleSeries('${id}')">
+        <span class="series-arrow open" id="sa_${id}">▶</span>
+        <span class="series-title">${esc(seriesKey)}</span>
+        <span class="series-count">${seriesBooks.length}冊 / 計${totalCnt}回</span>
+      </div>
+      <div class="series-books" id="sb_${id}">
+        <input class="series-tag-input" placeholder="シリーズ名を変更..."
+          value="${esc(seriesKey)}"
+          onchange="renameSeriesTag('${esc(seriesKey)}', this.value)">
+        <div class="book-grid" style="padding:0">
+        ${seriesBooks.map(b => {
+          const cnt = records.filter(r=>r.isbn===b.isbn).length;
+          const cv  = coverImgHtml(b.cover, b.coverFallbacks,'');
+          const bb  = b.borrowed ? '<div style="font-size:0.6rem;color:#E65100;margin-top:2px">📚 借りた本</div>' : '';
+          return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
+            <div class="book-thumb-cover">${cv}</div>
+            <div class="book-thumb-info">
+              <div class="book-thumb-title">${esc(b.title)}</div>
+              <div class="book-thumb-count">${cnt>0?'📖 '+cnt+'回':'未読'}</div>${bb}
+            </div>
+          </div>`;
+        }).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // グループ外
+  if (ungrouped.length > 0) {
+    if (Object.keys(groups).length > 0) {
+      html += `<div class="stats-section-title" style="margin-top:16px">その他</div>`;
+    }
+    html += `<div class="book-grid">${ungrouped.map(b => {
+      const cnt = records.filter(r=>r.isbn===b.isbn).length;
+      const cv  = coverImgHtml(b.cover, b.coverFallbacks,'');
+      const bb  = b.borrowed ? '<div style="font-size:0.6rem;color:#E65100;margin-top:2px">📚 借りた本</div>' : '';
+      return `<div class="book-thumb" onclick="openBookDetail('${b.isbn}')">
+        <div class="book-thumb-cover">${cv}</div>
+        <div class="book-thumb-info">
+          <div class="book-thumb-title">${esc(b.title)}</div>
+          <div class="book-thumb-count">${cnt>0?'📖 '+cnt+'回':'未読'}</div>${bb}
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  grid.innerHTML = html || '<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📦</div><div class="empty-text">まだ本が登録されていません</div></div>';
+}
+
+function toggleSeries(id) {
+  const body  = document.getElementById('sb_' + id);
+  const arrow = document.getElementById('sa_' + id);
+  const hdr   = document.getElementById('sh_' + id);
+  const open  = body.style.display !== 'none';
+  body.style.display  = open ? 'none' : '';
+  arrow.classList.toggle('open', !open);
+  hdr.classList.toggle('collapsed', open);
+}
+
+function renameSeriesTag(oldTag, newTag) {
+  newTag = newTag.trim();
+  if (!newTag || newTag === oldTag) return;
+  for (const b of shelf) {
+    if ((b.seriesTag || b.author) === oldTag) b.seriesTag = newTag;
+  }
+  localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+  if (window._firebaseReady && window._fsAddShelf) {
+    shelf.filter(b=>b.seriesTag===newTag).forEach(b=>window._fsAddShelf(b).catch(()=>{}));
+  }
+  renderShelf();
+}
 
 function renderStats() {
   document.getElementById('statBooks').textContent    = shelf.length;
@@ -1768,6 +2120,10 @@ function openAddRecordModal(book) {
 }
 function closeAddRecordModal() { document.getElementById('addRecordModal').classList.remove('open'); }
 
+function toggleReaction(btn) {
+  btn.classList.toggle('selected');
+}
+
 function toggleBorrowed() {
   const cb  = document.getElementById('ar-borrowed');
   const row = document.getElementById('borrowedRow');
@@ -1792,6 +2148,9 @@ function selectReader(who) {
 function saveRecord() {
   if (!currentReader)     { showToast('だれと読んだか選んでください'); return; }
   if (!selectedShelfBook) { showToast('本を選んでください'); return; }
+  const reactions = Array.from(
+    document.querySelectorAll('#reactionRow .reaction-btn.selected')
+  ).map(b => b.dataset.val);
   const rec = {
     id:             Date.now(),
     isbn:           selectedShelfBook.isbn,
@@ -1802,6 +2161,8 @@ function saveRecord() {
     reader:         currentReader,
     date:           document.getElementById('ar-date').value,
     comment:        document.getElementById('ar-comment').value.trim(),
+    parentComment:  document.getElementById('ar-parent-comment').value.trim(),
+    reactions,
     borrowed:       document.getElementById('ar-borrowed').checked
   };
   if (window._firebaseReady && window._fsAddRecord) {
@@ -1897,13 +2258,18 @@ function renderRecordList() {
     const borrowed = r.borrowed ? '<span class="reader-tag tag-borrowed">📚 借りた本</span>' : '';
     const date = r.date ? r.date.replace(/-/g,'/') : '';
     const cv   = coverImgHtml(r.cover, r.coverFallbacks);
-    const cmt  = r.comment ? `<div class="record-comment">💬 ${esc(r.comment)}</div>` : '';
+    const reactions = (r.reactions||[]).length > 0
+      ? `<div class="record-reactions">${r.reactions.map(e=>`<span class="reaction-tag">${e}</span>`).join('')}</div>` : '';
+    const cmt  = r.comment
+      ? `<div class="child-comment-display">💬 ${esc(r.comment)}</div>` : '';
+    const pcmt = r.parentComment
+      ? `<div class="record-parent-comment">📝 ${esc(r.parentComment)}</div>` : '';
     return `<div class="record-card">
       <div class="record-cover">${cv}</div>
       <div class="record-body">
         <div class="record-title">${esc(r.title)}</div>
         <div class="record-meta">${tag}${borrowed}<span class="record-date">${date}</span></div>
-        ${cmt}
+        ${reactions}${cmt}${pcmt}
       </div>
       <button class="record-delete" onclick="deleteRecord(${r.id})">🗑️</button>
     </div>`;
