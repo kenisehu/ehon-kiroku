@@ -609,11 +609,11 @@ body {
   </div>
   <div class="stat-card teal">
     <div class="stat-num" id="statSon">0</div>
-    <div class="stat-label">👦 越希</div>
+    <div class="stat-label">👦 えつき</div>
   </div>
   <div class="stat-card coral">
     <div class="stat-num" id="statDaughter">0</div>
-    <div class="stat-label">👧 風美歩</div>
+    <div class="stat-label">👧 ふみほ</div>
   </div>
 </div>
 
@@ -675,8 +675,8 @@ body {
 
   <div class="filter-row">
     <button class="filter-btn active" onclick="setRecordFilter('all',this)">すべて</button>
-    <button class="filter-btn" onclick="setRecordFilter('son',this)">👦 越希</button>
-    <button class="filter-btn" onclick="setRecordFilter('daughter',this)">👧 風美歩</button>
+    <button class="filter-btn" onclick="setRecordFilter('son',this)">👦 えつき</button>
+    <button class="filter-btn" onclick="setRecordFilter('daughter',this)">👧 ふみほ</button>
     <button class="filter-btn" onclick="setRecordFilter('both',this)">👨‍👧‍👦 ふたり</button>
   </div>
   <div id="recordList"></div>
@@ -842,8 +842,8 @@ body {
 
     <div class="field-label">だれと読んだ？</div>
     <div class="reader-row">
-      <button class="reader-btn" id="rb-son"      onclick="selectReader('son')"><span class="re">👦</span>越希</button>
-      <button class="reader-btn" id="rb-daughter" onclick="selectReader('daughter')"><span class="re">👧</span>風美歩</button>
+      <button class="reader-btn" id="rb-son"      onclick="selectReader('son')"><span class="re">👦</span>えつき</button>
+      <button class="reader-btn" id="rb-daughter" onclick="selectReader('daughter')"><span class="re">👧</span>ふみほ</button>
       <button class="reader-btn" id="rb-both"     onclick="selectReader('both')"><span class="re">👨‍👧‍👦</span>ふたり</button>
     </div>
 
@@ -1441,6 +1441,24 @@ function nextCoverFallback(img) {
   img.outerHTML = '<span style="font-size:2rem">📚</span>';
 }
 
+// 本棚の書影更新時に、同ISBNの読書記録も表紙を同期する
+async function syncRecordCovers(isbn, cover, coverFallbacks) {
+  let changed = false;
+  for (const rec of records) {
+    if (rec.isbn !== isbn) continue;
+    rec.cover          = cover;
+    rec.coverFallbacks = coverFallbacks || [];
+    changed = true;
+    if (window._firebaseReady && window._fsAddRecord) {
+      await window._fsAddRecord(rec).catch(() => {});
+    }
+  }
+  if (changed) {
+    if (!window._firebaseReady) localStorage.setItem('ehon_records', JSON.stringify(records));
+    renderRecordList();
+  }
+}
+
 // 画像URLが有効な書影かどうか判定（crossOriginなし・シンプルなサイズ判定のみ）
 function imgIsReal(url) {
   return new Promise(resolve => {
@@ -1502,6 +1520,7 @@ async function backfillMissingCovers(forceAll = false) {
         localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
       }
       updated++;
+      syncRecordCovers(book.isbn, book.cover, book.coverFallbacks);
       renderShelf();
       console.log(`[えほんきろく] 表紙更新: ${book.title}`);
     } else if (!foundCover && book.cover) {
@@ -1659,7 +1678,7 @@ function openBookDetail(isbn) {
     listEl.innerHTML = '<div style="color:#ccc;font-size:0.82rem;padding:8px 0">まだ記録がありません</div>';
   } else {
     listEl.innerHTML = bookRecs.map(r => {
-      const tag  = r.reader==='son' ? '👦 越希' : r.reader==='daughter' ? '👧 風美歩' : '👨‍👧‍👦 ふたり';
+      const tag  = r.reader==='son' ? '👦 えつき' : r.reader==='daughter' ? '👧 ふみほ' : '👨‍👧‍👦 ふたり';
       const date = r.date ? r.date.replace(/-/g,'/') : '';
       return `<div class="detail-read-item">
         <span>${tag}</span>
@@ -1774,15 +1793,16 @@ function saveRecord() {
   if (!currentReader)     { showToast('だれと読んだか選んでください'); return; }
   if (!selectedShelfBook) { showToast('本を選んでください'); return; }
   const rec = {
-    id:       Date.now(),
-    isbn:     selectedShelfBook.isbn,
-    title:    selectedShelfBook.title,
-    author:   selectedShelfBook.author,
-    cover:    selectedShelfBook.cover,
-    reader:   currentReader,
-    date:     document.getElementById('ar-date').value,
-    comment:  document.getElementById('ar-comment').value.trim(),
-    borrowed: document.getElementById('ar-borrowed').checked
+    id:             Date.now(),
+    isbn:           selectedShelfBook.isbn,
+    title:          selectedShelfBook.title,
+    author:         selectedShelfBook.author,
+    cover:          selectedShelfBook.cover,
+    coverFallbacks: selectedShelfBook.coverFallbacks || [],
+    reader:         currentReader,
+    date:           document.getElementById('ar-date').value,
+    comment:        document.getElementById('ar-comment').value.trim(),
+    borrowed:       document.getElementById('ar-borrowed').checked
   };
   if (window._firebaseReady && window._fsAddRecord) {
     window._fsAddRecord(rec)
@@ -1870,9 +1890,9 @@ function renderRecordList() {
   }
   el.innerHTML = list.map(r => {
     const tag  = r.reader==='son'
-      ? '<span class="reader-tag tag-son">👦 越希</span>'
+      ? '<span class="reader-tag tag-son">👦 えつき</span>'
       : r.reader==='daughter'
-      ? '<span class="reader-tag tag-daughter">👧 風美歩</span>'
+      ? '<span class="reader-tag tag-daughter">👧 ふみほ</span>'
       : '<span class="reader-tag tag-both">👨‍👧‍👦 ふたり</span>';
     const borrowed = r.borrowed ? '<span class="reader-tag tag-borrowed">📚 借りた本</span>' : '';
     const date = r.date ? r.date.replace(/-/g,'/') : '';
@@ -1934,7 +1954,7 @@ function downloadCSV(filename, rows) {
 }
 
 function readerName(r) {
-  return r === 'son' ? '越希' : r === 'daughter' ? '風美歩' : 'ふたり';
+  return r === 'son' ? 'えつき' : r === 'daughter' ? 'ふみほ' : 'ふたり';
 }
 
 function todayStr() {
