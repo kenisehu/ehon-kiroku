@@ -994,8 +994,11 @@ body {
 
 <script>
 // ===== DATA =====
-let shelf   = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
-let records = JSON.parse(localStorage.getItem('ehon_records') || '[]');
+let shelf        = JSON.parse(localStorage.getItem('ehon_shelf')   || '[]');
+let records      = JSON.parse(localStorage.getItem('ehon_records') || '[]');
+let shelfFilter   = 'all';
+let shelfViewMode = 'grid';
+let statFilter    = 'all';
 
 // Firebaseからのデータを受け取って画面に反映する
 // type=moduleのonSnapshotは window._pendingShelf/Records にデータを置く
@@ -1055,8 +1058,6 @@ function switchPage(page) {
 function renderAll() { renderStats(); renderShelf(); }
 
 // ===== STATS PAGE =====
-let statFilter = 'all';
-
 function setStatFilter(f, btn) {
   statFilter = f;
   document.querySelectorAll('.stat-filter-btn').forEach(b => b.classList.remove('active'));
@@ -1147,8 +1148,6 @@ function renderStatsPage() {
 }
 
 // ===== SERIES =====
-let shelfViewMode = 'grid'; // 'grid' | 'series'
-
 function toggleShelfView() {
   shelfViewMode = shelfViewMode === 'grid' ? 'series' : 'grid';
   const btn = document.getElementById('shelfViewBtn');
@@ -1274,8 +1273,6 @@ function renderStats() {
   document.getElementById('statSon').textContent      = records.filter(r => r.reader === 'son'      || r.reader === 'both').length;
   document.getElementById('statDaughter').textContent = records.filter(r => r.reader === 'daughter' || r.reader === 'both').length;
 }
-
-let shelfFilter = 'all';
 
 function setShelfFilter(f, btn) {
   shelfFilter = f;
