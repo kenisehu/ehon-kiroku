@@ -620,6 +620,31 @@ body {
 .tri-author { font-size: 0.73rem; color: #aaa; margin-top: 2px; }
 .tri-src    { font-size: 0.65rem; color: #ccc; margin-top: 2px; }
 .search-loading { text-align:center; color:#bbb; font-size:0.85rem; padding:16px 0; }
+.manual-reg-btn {
+  width:100%; margin-top:10px; padding:12px;
+  background: linear-gradient(135deg,#9C6FDE,#7B4FBF);
+  color:white; border:none; border-radius:14px; cursor:pointer;
+  font-family:'Kosugi Maru',sans-serif; font-size:0.88rem;
+  box-shadow: 0 4px 14px rgba(123,79,191,0.35);
+}
+.cover-input-row { display:flex; gap:8px; align-items:flex-start; margin-bottom:4px; }
+.cover-preview {
+  width:60px; height:76px; border-radius:8px; background:var(--warm);
+  flex-shrink:0; overflow:hidden; display:flex; align-items:center;
+  justify-content:center; font-size:1.6rem;
+}
+.cover-preview img { width:100%; height:100%; object-fit:cover; }
+.cover-input-wrap { flex:1; display:flex; flex-direction:column; gap:6px; }
+.cover-url-input {
+  width:100%; padding:9px 12px; border:1.5px solid var(--warm); border-radius:10px;
+  font-family:'Kosugi Maru',sans-serif; font-size:0.8rem; outline:none; background:#fffaf5;
+}
+.cover-url-input:focus { border-color:var(--teal); }
+.cover-file-btn {
+  padding:7px 10px; background:var(--warm); border:none; border-radius:10px;
+  font-family:'Kosugi Maru',sans-serif; font-size:0.78rem; cursor:pointer; color:var(--navy);
+  text-align:center;
+}
 
 /* TOAST */
 .toast {
@@ -892,7 +917,53 @@ body {
       <button class="title-search-btn" onclick="doTitleSearch()">🔍</button>
     </div>
     <div id="titleSearchResults"></div>
+    <button class="manual-reg-btn" onclick="openManualRegModal()">
+      ✏️ 見つからない場合は手動で登録
+    </button>
     <button class="btn-cancel" onclick="closeTitleSearchModal()">キャンセル</button>
+  </div>
+</div>
+
+<!-- 手動登録モーダル（ISBNなし本用） -->
+<div class="modal-overlay" id="manualRegModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-heading">✏️ 手動で登録する</div>
+
+    <div class="field-label">タイトル <span style="color:#FF7A5A">*</span></div>
+    <input class="field-input" id="mr-title" type="text"
+      placeholder="例：キンダーメルヘン 10月号">
+
+    <div class="field-label">著者・作者（任意）</div>
+    <input class="field-input" id="mr-author" type="text"
+      placeholder="例：古沢たつお">
+
+    <div class="field-label">表紙画像（任意）</div>
+    <div class="cover-input-row">
+      <div class="cover-preview" id="mr-cover-preview">📚</div>
+      <div class="cover-input-wrap">
+        <input class="cover-url-input" id="mr-cover-url" type="url"
+          placeholder="画像URLを貼り付け..."
+          oninput="previewManualCover()">
+        <label class="cover-file-btn">
+          📁 ファイルから選ぶ
+          <input type="file" accept="image/*" style="display:none"
+            onchange="loadManualCoverFile(this)">
+        </label>
+      </div>
+    </div>
+
+    <div class="field-label">メモ（シリーズ名など・任意）</div>
+    <input class="field-input" id="mr-memo" type="text"
+      placeholder="例：キンダーメルヘン、2025年度">
+
+    <div class="borrowed-check-row" id="mr-borrowedRow" onclick="toggleManualBorrowed()">
+      <input type="checkbox" id="mr-borrowed" onclick="event.stopPropagation()">
+      <span class="borrowed-check-label">📚 図書館・借りた本</span>
+    </div>
+
+    <button class="btn-primary" onclick="saveManualBook()">📦 本棚に追加する</button>
+    <button class="btn-cancel"  onclick="closeManualRegModal()">キャンセル</button>
   </div>
 </div>
 
@@ -1114,7 +1185,7 @@ function renderStatsPage() {
         <div class="rank-cover">${cv}</div>
         <div class="rank-info">
           <div class="rank-title">${esc(b.title)}</div>
-          <div class="rank-sub">${b.isbn}</div>
+          <div class="rank-sub">${b.isManual ? '手動登録' : b.isbn}</div>
         </div>
         <div class="rank-count">${b.count}<span>回</span></div>
       </div>`;
@@ -1868,7 +1939,7 @@ function imgExists(url) { return imgIsReal(url); }
 async function backfillMissingCovers(forceAll = false) {
   // 対象：ISBNあり、かつ（表紙なし or forceAll）
   // coverFallbacksがない古いデータも対象（cover URLだけ持っていてfallbacksがない）
-  const targets = shelf.filter(b => b.isbn && (forceAll || !b.cover || !b.coverFallbacks || b.coverFallbacks.length === 0));
+  const targets = shelf.filter(b => b.isbn && !b.isManual && (forceAll || !b.cover || !b.coverFallbacks || b.coverFallbacks.length === 0));
   if (targets.length === 0) {
     if (forceAll) showToast('対象の本がありません');
     return;
@@ -1981,6 +2052,101 @@ function closeTitleSearchModal() {
   document.getElementById('titleSearchModal').classList.remove('open');
 }
 
+// ===== 手動登録 =====
+let _manualCoverDataUrl = null; // ファイル選択時のDataURL
+
+function openManualRegModal() {
+  closeTitleSearchModal();
+  // フォームリセット
+  document.getElementById('mr-title').value   = '';
+  document.getElementById('mr-author').value  = '';
+  document.getElementById('mr-cover-url').value = '';
+  document.getElementById('mr-memo').value    = '';
+  document.getElementById('mr-borrowed').checked = false;
+  document.getElementById('mr-borrowedRow').classList.remove('checked');
+  document.getElementById('mr-cover-preview').innerHTML = '📚';
+  _manualCoverDataUrl = null;
+  document.getElementById('manualRegModal').classList.add('open');
+  setTimeout(() => document.getElementById('mr-title').focus(), 300);
+}
+
+function closeManualRegModal() {
+  document.getElementById('manualRegModal').classList.remove('open');
+}
+
+function toggleManualBorrowed() {
+  const cb  = document.getElementById('mr-borrowed');
+  const row = document.getElementById('mr-borrowedRow');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+}
+
+function previewManualCover() {
+  const url = document.getElementById('mr-cover-url').value.trim();
+  _manualCoverDataUrl = null;
+  const prev = document.getElementById('mr-cover-preview');
+  if (!url) { prev.innerHTML = '📚'; return; }
+  prev.innerHTML = `<img src="${esc(url)}" style="width:100%;height:100%;object-fit:cover"
+    onerror="this.parentElement.innerHTML='❌'">`;
+}
+
+function loadManualCoverFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    _manualCoverDataUrl = e.target.result;
+    document.getElementById('mr-cover-url').value = '';
+    document.getElementById('mr-cover-preview').innerHTML =
+      `<img src="${_manualCoverDataUrl}" style="width:100%;height:100%;object-fit:cover">`;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function saveManualBook() {
+  const title = document.getElementById('mr-title').value.trim();
+  if (!title) { showToast('タイトルを入力してください'); return; }
+
+  const author   = document.getElementById('mr-author').value.trim();
+  const memo     = document.getElementById('mr-memo').value.trim();
+  const borrowed = document.getElementById('mr-borrowed').checked;
+  const coverUrl = document.getElementById('mr-cover-url').value.trim();
+
+  // 表紙：ファイル選択 > URL入力 > なし
+  const cover = _manualCoverDataUrl || coverUrl || null;
+
+  // ISBNなし本はユニークIDを生成（timestamp + random）
+  const fakeIsbn = 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+
+  const book = {
+    isbn:           fakeIsbn,
+    title,
+    author:         author || '',
+    cover:          cover  || null,
+    coverFallbacks: [],
+    addedAt:        new Date().toISOString().slice(0,10),
+    borrowed,
+    seriesTag:      memo   || null,
+    isManual:       true,   // ISBN検索対象外フラグ
+  };
+
+  // 重複チェック（同名タイトル）
+  if (shelf.find(b => b.title === title)) {
+    if (!confirm(`「${title}」はすでに登録されています。それでも追加しますか？`)) return;
+  }
+
+  if (window._firebaseReady && window._fsAddShelf) {
+    await window._fsAddShelf(book).catch(e => { console.error(e); showToast('⚠️ 保存に失敗しました'); return; });
+  } else {
+    shelf.unshift(book);
+    localStorage.setItem('ehon_shelf', JSON.stringify(shelf));
+    renderAll();
+  }
+
+  closeManualRegModal();
+  showToast(`📦「${title}」を本棚に登録しました！`);
+}
+
 async function doTitleSearch() {
   const q = document.getElementById('titleSearchInput').value.trim();
   if (!q) return;
@@ -2036,7 +2202,8 @@ function openBookDetail(isbn) {
   document.getElementById('bd-title').textContent  = book.title;
   document.getElementById('bd-author').textContent = book.author;
   const borrowedTxt = book.borrowed ? '  📚 借りた本' : '';
-  document.getElementById('bd-isbn').textContent   = 'ISBN: ' + book.isbn + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '') + borrowedTxt;
+  const isbnDisplay = book.isManual ? '手動登録' : ('ISBN: ' + book.isbn);
+  document.getElementById('bd-isbn').textContent   = isbnDisplay + (book.addedAt ? '  ／  登録日: ' + book.addedAt.replace(/-/g,'/') : '') + borrowedTxt;
   document.getElementById('bd-cover').innerHTML = coverImgHtml(book.cover, book.coverFallbacks);
 
   const bookRecs = records.filter(r => r.isbn === isbn);
